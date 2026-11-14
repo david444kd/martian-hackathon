@@ -1,3 +1,5 @@
+import i18n from "../i18n";
+
 const R = 3_389_500; // Mars mean radius, m
 
 export function distanceM(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -14,15 +16,33 @@ export function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: numbe
   return ((Math.atan2(y, x) / r) + 360) % 360;
 }
 
-const POINTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-export const compass = (deg: number) => POINTS[Math.round(deg / 45) % 8];
+const DEFAULT_POINTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+export const compass = (deg: number) => {
+  const points = (i18n.t("units.compass_points", { returnObjects: true }) as string[]) || DEFAULT_POINTS;
+  return points[Math.round(deg / 45) % 8];
+};
 
-export const fmtKm = (m: number) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(m < 10_000 ? 2 : 1)} km`);
+export const fmtKm = (m: number) => {
+  if (m < 1000) {
+    return `${Math.round(m)} ${i18n.t("units.m", { defaultValue: "m" })}`;
+  }
+  const val = (m / 1000).toFixed(m < 10_000 ? 2 : 1);
+  return `${val} ${i18n.t("units.km", { defaultValue: "km" })}`;
+};
+
 export const fmtDur = (min: number) => {
   const h = Math.floor(min / 60), m = Math.round(min % 60);
-  return h ? `${h} h ${m.toString().padStart(2, "0")} min` : `${m} min`;
+  if (h) {
+    return i18n.t("units.hours_mins", { h, m: m.toString().padStart(2, "0"), defaultValue: `${h} h ${m.toString().padStart(2, "0")} min` });
+  }
+  return i18n.t("units.mins", { m, defaultValue: `${m} min` });
 };
+
 export const fmtLL = (lat: number, lon: number) =>
   `${Math.abs(lat).toFixed(4)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(4)}°${lon >= 0 ? "E" : "W"}`;
-export const fmtDate = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
+
+export const fmtDate = (iso: string | null) => {
+  if (!iso) return "—";
+  const loc = i18n.language === "kk" ? "kk-KZ" : i18n.language === "ru" ? "ru-RU" : "en-US";
+  return new Date(iso).toLocaleString(loc, { dateStyle: "medium", timeStyle: "short" });
+};

@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import L from "leaflet";
 import { ImageOverlay, MapContainer, Rectangle, TileLayer, useMap, useMapEvents } from "react-leaflet";
+import { useTranslation } from "react-i18next";
 import { Image as ImageIcon, Mountain } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { reliefCanvas } from "../lib/relief";
@@ -30,6 +31,7 @@ interface Props {
 }
 
 export function ZoneLeafletMap({ zone, hm, onPick, children, className }: Props) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<Mode>("photo");
   const bounds = useMemo(() => L.latLngBounds([zone.south, zone.west], [zone.north, zone.east]), [zone]);
   const relief = useMemo(
@@ -58,7 +60,7 @@ export function ZoneLeafletMap({ zone, hm, onPick, children, className }: Props)
       </MapContainer>
 
       <div className="absolute top-3 left-3 z-[500] flex rounded-lg border bg-card/85 p-0.5 text-xs backdrop-blur">
-        {([["photo", "Photo", ImageIcon], ["relief", "Relief", Mountain]] as const).map(([m, label, Icon]) => (
+        {([["photo", t("map.photo"), ImageIcon], ["relief", t("map.relief"), Mountain]] as const).map(([m, label, Icon]) => (
           <button key={m} type="button" onClick={() => setMode(m)}
             className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 transition-colors", mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}>
             <Icon className="size-3.5" />{label}

@@ -4,9 +4,11 @@
 //   /helmet/:crewId    EVA Helmet (Meta Quest 2)
 import { lazy, Suspense } from "react";
 import { Link, Navigate, Route, Routes } from "react-router";
+import { useTranslation } from "react-i18next";
 import { Globe2, HardHat, Ship as ShipIcon } from "lucide-react";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { configError } from "./lib/db";
+import { LanguageSwitcher } from "./components/LanguageSwitcher";
 
 // each product loads only its own code
 const Dispatch = lazy(() => import("./pages/Dispatch").then((m) => ({ default: m.Dispatch })));
@@ -16,12 +18,13 @@ const Helmet = lazy(() => import("./pages/Helmet").then((m) => ({ default: m.Hel
 const HelmetPicker = lazy(() => import("./pages/Helmet").then((m) => ({ default: m.HelmetPicker })));
 
 export function App() {
+  const { t } = useTranslation();
   return (
     <>
       {configError && (
-        <div className="fixed inset-x-0 top-0 z-[2000] bg-destructive px-4 py-2 text-center text-sm text-white">{configError}</div>
+        <div className="fixed inset-x-0 top-0 z-[2000] bg-destructive px-4 py-2 text-center text-sm text-white">{t("common.config_error")}</div>
       )}
-      <Suspense fallback={<div className="grid h-full place-items-center text-sm text-muted-foreground">Loading…</div>}>
+      <Suspense fallback={<div className="grid h-full place-items-center text-sm text-muted-foreground">{t("common.loading")}</div>}>
       <Routes>
         <Route index element={<Launcher />} />
         <Route path="dispatch" element={<Dispatch />} />
@@ -37,22 +40,27 @@ export function App() {
   );
 }
 
-const PRODUCTS = [
-  { to: "/dispatch", icon: Globe2, name: "Mission Control", text: "The dispatcher's console: crews on the Mars globe, their work plans." },
-  { to: "/ship", icon: ShipIcon, name: "Ship Console", text: "The crew's window on the ship: plans on the map, safe routes, EVA control." },
-  { to: "/helmet", icon: HardHat, name: "EVA Helmet", text: "Meta Quest 2: the active route on the surface, hands-free." },
-];
-
 function Launcher() {
+  const { t } = useTranslation();
+
+  const products = [
+    { to: "/dispatch", icon: Globe2, name: t("launcher.dispatchTitle"), text: t("launcher.dispatchDesc") },
+    { to: "/ship", icon: ShipIcon, name: t("launcher.shipTitle"), text: t("launcher.shipDesc") },
+    { to: "/helmet", icon: HardHat, name: t("launcher.helmetTitle"), text: t("launcher.helmetDesc") },
+  ];
+
   return (
-    <div className="mx-auto flex h-full max-w-4xl flex-col justify-center gap-8 overflow-auto p-6">
+    <div className="relative mx-auto flex h-full max-w-4xl flex-col justify-center gap-8 overflow-auto p-6">
+      <div className="absolute top-6 right-6">
+        <LanguageSwitcher />
+      </div>
       <div>
-        <div className="text-xs font-semibold tracking-[0.25em] text-muted-foreground uppercase">Mars Ops</div>
-        <h1 className="mt-1 font-heading text-3xl font-semibold">Surface operations suite</h1>
-        <p className="mt-1 text-muted-foreground">Three applications sharing one live mission database.</p>
+        <div className="text-xs font-semibold tracking-[0.25em] text-muted-foreground uppercase">{t("common.appName")}</div>
+        <h1 className="mt-1 font-heading text-3xl font-semibold">{t("launcher.tagline")}</h1>
+        <p className="mt-1 text-muted-foreground">{t("launcher.subtitle")}</p>
       </div>
       <div className="grid gap-4 md:grid-cols-3">
-        {PRODUCTS.map(({ to, icon: Icon, name, text }) => (
+        {products.map(({ to, icon: Icon, name, text }) => (
           <Link key={to} to={to} className="group">
             <Card className="h-full transition-colors group-hover:ring-primary/60">
               <CardHeader>

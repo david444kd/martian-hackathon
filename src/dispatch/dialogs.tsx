@@ -1,6 +1,7 @@
 // Mission control's dialogs: register a crew (where it landed) and create / edit a work plan.
 import { useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -12,12 +13,13 @@ import { ZoneLeafletMap } from "../components/ZoneLeafletMap";
 import { DOT, pin } from "../components/mapPins";
 import { ErrorNote } from "../components/common";
 import { useCreateCrew, useCreatePlan, useUpdatePlan } from "../lib/queries";
-import { STATUSES, STATUS_LABEL, type Crew, type NewPlan, type PlanStatus, type WorkPlan } from "../lib/types";
+import { STATUSES, type Crew, type NewPlan, type PlanStatus, type WorkPlan } from "../lib/types";
 import { crewHome, elevationAt, inZone, useHeightmap, useZones, type Heightmap, type Zone } from "../lib/zones";
 import { distanceM, fmtKm, fmtLL } from "../lib/geo";
 
 
 export function NewCrewDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: (c: Crew) => void }) {
+  const { t } = useTranslation();
   const zones = useZones();
   const [name, setName] = useState(""), [ship, setShip] = useState("");
   const [zoneId, setZoneId] = useState("jezero");
@@ -31,7 +33,7 @@ export function NewCrewDialog({ open, onOpenChange, onCreated }: { open: boolean
     if (!name.trim() || !landing) return;
     create.mutate({ name: name.trim(), ship: ship.trim(), zone: zoneId, lat: landing[0], lon: landing[1] }, {
       onSuccess: (c) => {
-        toast.success(`${c.name} registered`);
+        toast.success(t("dialogs.crew_registered_toast", { name: c.name }));
         setName(""); setShip(""); setSpot(null);
         onOpenChange(false);
         onCreated(c);
@@ -45,20 +47,20 @@ export function NewCrewDialog({ open, onOpenChange, onCreated }: { open: boolean
         <form onSubmit={submit} className="grid gap-5 md:grid-cols-[320px_1fr]">
           <div className="flex flex-col gap-4">
             <DialogHeader>
-              <DialogTitle>New crew</DialogTitle>
-              <DialogDescription>Register a crew on the surface and where it landed.</DialogDescription>
+              <DialogTitle>{t("dialogs.new_crew_title")}</DialogTitle>
+              <DialogDescription>{t("dialogs.new_crew_desc")}</DialogDescription>
             </DialogHeader>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="crew-name">Crew</FieldLabel>
-                <Input id="crew-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ares-2" required autoFocus />
+                <FieldLabel htmlFor="crew-name">{t("dialogs.crew_name_label")}</FieldLabel>
+                <Input id="crew-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("dialogs.crew_name_placeholder")} required autoFocus />
               </Field>
               <Field>
-                <FieldLabel htmlFor="crew-ship">Ship</FieldLabel>
-                <Input id="crew-ship" value={ship} onChange={(e) => setShip(e.target.value)} placeholder="Odyssey" />
+                <FieldLabel htmlFor="crew-ship">{t("dialogs.ship_label")}</FieldLabel>
+                <Input id="crew-ship" value={ship} onChange={(e) => setShip(e.target.value)} placeholder={t("dialogs.ship_placeholder")} />
               </Field>
               <Field>
-                <FieldLabel>Landing zone</FieldLabel>
+                <FieldLabel>{t("dialogs.landing_zone_label")}</FieldLabel>
                 <Select value={zoneId} onValueChange={(v) => { setZoneId(v); setSpot(null); }}>
                   <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -66,18 +68,18 @@ export function NewCrewDialog({ open, onOpenChange, onCreated }: { open: boolean
                   </SelectContent>
                 </Select>
                 <FieldDescription>
-                  {landing ? <>Landing point {fmtLL(landing[0], landing[1])}. Click the map to move it.</> : "Click the map to set the landing point."}
+                  {landing ? t("dialogs.landing_point_desc", { coords: fmtLL(landing[0], landing[1]) }) : t("dialogs.click_map_landing")}
                 </FieldDescription>
               </Field>
             </FieldGroup>
             <ErrorNote error={create.error} />
             <DialogFooter className="mt-auto">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button type="submit" disabled={create.isPending || !name.trim() || !landing}>Register crew</Button>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
+              <Button type="submit" disabled={create.isPending || !name.trim() || !landing}>{t("dialogs.register_crew_btn")}</Button>
             </DialogFooter>
           </div>
           <PickMap zone={zone} hm={hm.data} onPick={(lat, lon) => setSpot([lat, lon])}>
-            {landing && <Marker position={landing} icon={pin(`${DOT} bg-landing`, "", 18)}><Tooltip direction="top" offset={[0, -10]} permanent>Landing</Tooltip></Marker>}
+            {landing && <Marker position={landing} icon={pin(`${DOT} bg-landing`, "", 18)}><Tooltip direction="top" offset={[0, -10]} permanent>{t("dialogs.landing_marker")}</Tooltip></Marker>}
           </PickMap>
         </form>
       </DialogContent>
@@ -93,6 +95,7 @@ const toLocalInput = (iso: string | null) => {
 
 /** create (plan = null) or edit a crew's work plan; the target is picked on the crew's zone map */
 export function PlanDialog({ crew, plan, open, onOpenChange }: { crew: Crew; plan: WorkPlan | null; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const { t } = useTranslation();
   const zones = useZones();
   const zoneId = plan?.zone ?? crew.zone;
   const zone = zones.data?.find((z) => z.id === zoneId), hm = useHeightmap(zone);
@@ -112,7 +115,7 @@ export function PlanDialog({ crew, plan, open, onOpenChange }: { crew: Crew; pla
       crew_id: crew.id, title: title.trim(), description: description.trim(), zone: zoneId, status,
       target_lat: target[0], target_lon: target[1], scheduled_at: when ? new Date(when).toISOString() : null,
     };
-    const done = () => { toast.success(plan ? "Work plan updated" : "Work plan sent to the crew"); onOpenChange(false); };
+    const done = () => { toast.success(plan ? t("dialogs.plan_updated_toast") : t("dialogs.plan_created_toast")); onOpenChange(false); };
     if (!plan) { create.mutate(row, { onSuccess: done }); return; }
     // a moved target makes the crew's route useless: clear it so the ship makes a new one
     const moved = plan.target_lat !== row.target_lat || plan.target_lon !== row.target_lon;
@@ -125,50 +128,54 @@ export function PlanDialog({ crew, plan, open, onOpenChange }: { crew: Crew; pla
         <form onSubmit={submit} className="grid gap-5 md:grid-cols-[360px_1fr]">
           <div className="flex flex-col gap-4">
             <DialogHeader>
-              <DialogTitle>{plan ? "Edit work plan" : `New work plan · ${crew.name}`}</DialogTitle>
-              <DialogDescription>{zone?.name ?? zoneId}. Click the map to set the target.</DialogDescription>
+              <DialogTitle>{plan ? t("dialogs.edit_plan_title") : t("dialogs.new_plan_title", { name: crew.name })}</DialogTitle>
+              <DialogDescription>{t("dialogs.plan_map_hint", { zone: zone?.name ?? zoneId })}</DialogDescription>
             </DialogHeader>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="plan-title">Title</FieldLabel>
-                <Input id="plan-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Sample the delta front" required autoFocus />
+                <FieldLabel htmlFor="plan-title">{t("dialogs.plan_title_label")}</FieldLabel>
+                <Input id="plan-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("dialogs.plan_title_placeholder")} required autoFocus />
               </Field>
               <Field>
-                <FieldLabel htmlFor="plan-tasks">Tasks</FieldLabel>
-                <Textarea id="plan-tasks" rows={4} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What the EVA team does at the target" />
+                <FieldLabel htmlFor="plan-tasks">{t("dialogs.plan_tasks_label")}</FieldLabel>
+                <Textarea id="plan-tasks" rows={4} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("dialogs.plan_tasks_placeholder")} />
               </Field>
               <div className="grid grid-cols-2 gap-3">
                 <Field>
-                  <FieldLabel>Status</FieldLabel>
+                  <FieldLabel>{t("dialogs.status_label")}</FieldLabel>
                   <Select value={status} onValueChange={(v) => setStatus(v as PlanStatus)}>
                     <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {STATUSES.map((s) => <SelectItem key={s} value={s}>{s === "in_progress" ? "EVA active" : STATUS_LABEL[s]}</SelectItem>)}
+                      {STATUSES.map((s) => <SelectItem key={s} value={s}>{s === "in_progress" ? t("status.eva_active") : t(`status.${s}`)}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="plan-when">Scheduled</FieldLabel>
+                  <FieldLabel htmlFor="plan-when">{t("dialogs.scheduled_label")}</FieldLabel>
                   <Input id="plan-when" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
                 </Field>
               </div>
               <FieldDescription>
                 {target && hm.data
-                  ? <>Target {fmtLL(target[0], target[1])} · {Math.round(elevationAt(hm.data, target[0], target[1]))} m{home && <> · {fmtKm(distanceM(home[0], home[1], target[0], target[1]))} from the landing site</>}</>
-                  : <span className="text-primary">Click the map to set the target.</span>}
-                {plan?.route && <><br />Moving the target clears the ship's current route.</>}
+                  ? t("dialogs.target_summary", {
+                      coords: fmtLL(target[0], target[1]),
+                      elev: Math.round(elevationAt(hm.data, target[0], target[1])),
+                      dist: home ? fmtKm(distanceM(home[0], home[1], target[0], target[1])) : ""
+                    })
+                  : <span className="text-primary">{t("dialogs.click_map_target")}</span>}
+                {plan?.route && <><br />{t("dialogs.move_target_warning")}</>}
               </FieldDescription>
             </FieldGroup>
             <ErrorNote error={create.error ?? update.error} />
             <DialogFooter className="mt-auto">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button type="submit" disabled={busy || !target || !title.trim()}>{plan ? "Save changes" : "Create plan"}</Button>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
+              <Button type="submit" disabled={busy || !target || !title.trim()}>{plan ? t("dialogs.save_changes_btn") : t("dialogs.create_plan_btn")}</Button>
             </DialogFooter>
           </div>
           <PickMap zone={zone} hm={hm.data} onPick={(lat, lon) => setTarget([lat, lon])}>
             {plan?.route && <Polyline positions={plan.route.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={{ color: "#ffb347", weight: 3, opacity: 0.6, dashArray: "6 8" }} />}
-            {home && <Marker position={home} icon={pin(`${DOT} bg-landing`, "", 16)}><Tooltip direction="top" offset={[0, -8]}>Landing site</Tooltip></Marker>}
-            {target && <Marker position={target} icon={pin(`${DOT} bg-target`, "", 20)}><Tooltip direction="top" offset={[0, -10]} permanent>Target</Tooltip></Marker>}
+            {home && <Marker position={home} icon={pin(`${DOT} bg-landing`, "", 16)}><Tooltip direction="top" offset={[0, -8]}>{t("dialogs.landing_site_marker")}</Tooltip></Marker>}
+            {target && <Marker position={target} icon={pin(`${DOT} bg-target`, "", 20)}><Tooltip direction="top" offset={[0, -10]} permanent>{t("dialogs.target_marker")}</Tooltip></Marker>}
           </PickMap>
         </form>
       </DialogContent>
@@ -178,7 +185,8 @@ export function PlanDialog({ crew, plan, open, onOpenChange }: { crew: Crew; pla
 
 /** the zone map in a dialog: as tall as the dialog allows; clicks outside the zone are ignored */
 function PickMap({ zone, hm, onPick, children }: { zone: Zone | undefined; hm: Heightmap | undefined; onPick: (lat: number, lon: number) => void; children: ReactNode }) {
-  if (!zone) return <div className="grid h-[70vh] min-h-[420px] place-items-center rounded-xl border text-sm text-muted-foreground">Loading map…</div>;
+  const { t } = useTranslation();
+  if (!zone) return <div className="grid h-[70vh] min-h-[420px] place-items-center rounded-xl border text-sm text-muted-foreground">{t("ship.loading_map")}</div>;
   return (
     <ZoneLeafletMap zone={zone} hm={hm} className="h-[70vh] min-h-[420px] rounded-xl border"
       onPick={(lat, lon) => { if (inZone(zone, lat, lon)) onPick(lat, lon); }}>

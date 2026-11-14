@@ -1,39 +1,49 @@
 // What you hear inside the helmet, all synthesised with Web Audio (no recordings): the life-support
 // fan, your own breathing (its rate follows the suit model), muffled footsteps carried through the
 // suit, wind in a dust storm, radio tones before a call, the master alarm, and the call itself read
-// out: a recorded human voice from public/voice/ when there is one, else speech synthesis (Russian). Browsers allow sound only after a user gesture: `start()` is called from
+// out in the interface language (English by default): a recorded human voice from public/voice/<lang>/ when there is one, else speech synthesis. Browsers allow sound only after a user gesture: `start()` is called from
 // the "Begin EVA" / "Enter VR" buttons. Mars' thin air carries almost no sound; this is the suit.
+
+import i18n from "../i18n";
 
 export type Tone = "info" | "warning" | "critical";
 
+type VoiceLang = "en" | "ru" | "kk";
+/** the language the helmet speaks: the interface language */
+const voiceLang = (): VoiceLang => (i18n.language === "ru" || i18n.language === "kk" ? i18n.language : "en");
+const BCP: Record<VoiceLang, string> = { en: "en-US", ru: "ru-RU", kk: "kk-KZ" };
+/** voices to try, in order: the language itself, then (few systems speak Kazakh) Russian, then English */
+const FALLBACK: Record<VoiceLang, string[]> = { en: ["en"], ru: ["ru", "en"], kk: ["kk", "ru", "en"] };
+
 /**
- * The most human-sounding Russian voice the system has: neural "Natural"/"Online" voices (Microsoft
- * Svetlana / Dmitry in Edge and Windows 11), then Google's, then Apple's (Milena / Yuri), and only then
- * the plain default; with no Russian voice at all, the best English one.
+ * The most human-sounding voice the system has for the helmet's language: neural "Natural"/"Online"
+ * voices (Microsoft Aria / Jenny / Guy, Svetlana / Dmitry in Edge and Windows 11), then Google's, then
+ * Apple's (Samantha, Milena / Yuri), and only then the plain default.
  */
-let chosen: SpeechSynthesisVoice | null | undefined;
-function pickVoice(): SpeechSynthesisVoice | null {
-  if (chosen) return chosen;
+const chosen = new Map<VoiceLang, SpeechSynthesisVoice>();
+function pickVoice(lang: VoiceLang): SpeechSynthesisVoice | null {
+  const hit = chosen.get(lang);
+  if (hit) return hit;
   const all = typeof speechSynthesis !== "undefined" ? speechSynthesis.getVoices() : [];
-  const ru = all.filter((v) => v.lang.toLowerCase().startsWith("ru"));
-  const pool = ru.length ? ru : all.filter((v) => v.lang.toLowerCase().startsWith("en"));
-  if (!pool.length) return null; // voices load asynchronously: try again next time
+  const pool = FALLBACK[lang].map((l) => all.filter((v) => v.lang.toLowerCase().startsWith(l))).find((p) => p.length);
+  if (!pool) return null; // voices load asynchronously: try again next time
   const score = (v: SpeechSynthesisVoice) => {
     const n = v.name.toLowerCase();
     let s = 0;
     if (/natural|neural|online/.test(n)) s += 50;
     if (/premium|enhanced/.test(n)) s += 35;
     if (n.includes("google")) s += 25;
-    if (/dmitry|дмитрий|yuri|юрий|svetlana|светлана|milena|милена/.test(n)) s += 10;
-    if (/irina|ирина|pavel|павел|desktop/.test(n)) s -= 10; // the old robotic SAPI voices
+    if (/aria|jenny|guy|ava|andrew|emma|brian|samantha|dmitry|дмитрий|yuri|юрий|svetlana|светлана|milena|милена|daulet|aigul/.test(n)) s += 10;
+    if (/irina|ирина|pavel|павел|david|zira|desktop/.test(n)) s -= 10; // the old robotic SAPI voices
     return s;
   };
-  chosen = [...pool].sort((a, b) => score(b) - score(a))[0];
-  return chosen;
+  const best = [...pool].sort((a, b) => score(b) - score(a))[0];
+  chosen.set(lang, best);
+  return best;
 }
-if (typeof speechSynthesis !== "undefined") speechSynthesis.addEventListener?.("voiceschanged", () => { chosen = undefined; });
+if (typeof speechSynthesis !== "undefined") speechSynthesis.addEventListener?.("voiceschanged", () => { chosen.clear(); });
 
-/** recordings in public/voice/<key>.mp3: null = there is none (checked once per key) */
+/** recordings in public/voice/<lang>/<key>.mp3: null = there is none (checked once per language and key) */
 const recordings = new Map<string, Promise<AudioBuffer | null>>();
 
 export class SuitAudio {
@@ -187,13 +197,14 @@ export class SuitAudio {
     const ctx = this.ctx;
     if (this.muted) return;
     if (!ctx) { this.say(text, urgent); return; }
-    let rec = recordings.get(key);
+    const path = `${voiceLang()}/${key}`;
+    let rec = recordings.get(path);
     if (!rec) {
-      rec = fetch(`/voice/${key}.mp3`)
+      rec = fetch(`/voice/${path}.mp3`)
         .then((r) => (r.ok && (r.headers.get("content-type") ?? "").includes("audio") ? r.arrayBuffer() : null))
         .then((b) => (b ? ctx.decodeAudioData(b) : null))
         .catch(() => null);
-      recordings.set(key, rec);
+      recordings.set(path, rec);
     }
     void rec.then((buf) => {
       if (!buf || ctx.state !== "running") { this.say(text, urgent); return; }
@@ -213,9 +224,9 @@ export class SuitAudio {
   say(text: string, urgent = false) {
     if (this.muted || !("speechSynthesis" in window)) return;
     const u = new SpeechSynthesisUtterance(text);
-    const voice = pickVoice();
+    const lang = voiceLang(), voice = pickVoice(lang);
     if (voice) u.voice = voice;
-    u.lang = voice?.lang ?? "ru-RU";
+    u.lang = voice?.lang ?? BCP[lang];
     // spoken plainly, like on the radio: natural pitch, a little quicker when it matters
     u.rate = urgent ? 1.1 : 1.0; u.pitch = 1; u.volume = 1;
     u.onstart = () => { this.speaking = true; };

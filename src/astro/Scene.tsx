@@ -8,6 +8,8 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, useTexture } from "@react-three/drei";
 import * as THREE from "three";
+import { useTranslation } from "react-i18next";
+import i18n from "../i18n";
 import type { Heightmap } from "../lib/zones";
 import type { MarsEvent, Route, WorkPlan } from "../lib/types";
 import { LEVEL_COLOR } from "../components/levels";
@@ -189,12 +191,14 @@ export function tube(hm: Heightmap, route: Route, M: THREE.Matrix4, lift: number
 
 /** the next three checkpoints and the target, as poles with a label that stays readable at any distance */
 function Beacons({ hm, route, cps, M, step }: { hm: Heightmap; route: Route; cps: Checkpoint[]; M: THREE.Matrix4; step: number }) {
+  const { t } = useTranslation();
   const items = useMemo(() => cps.flatMap((cp, k) => {
     if (k <= step || (k > step + 3 && k !== cps.length - 1)) return [];
     const [lat, lon] = route.points[cp.i];
     const target = cp.label === "TARGET", color = target ? "#7be08a" : k === step + 1 ? "#ffffff" : "#ffb347";
-    return [{ key: `${cp.i}-${k}`, base: localOf(hm, lat, lon).applyMatrix4(M), color, target, ...labelTexture(cp.label, color) }];
-  }), [hm, route, cps, M, step]);
+    const label = cp.label === "TARGET" ? t("astro.target_beacon") : cp.label === "START" ? t("astro.start_beacon") : cp.label;
+    return [{ key: `${cp.i}-${k}`, base: localOf(hm, lat, lon).applyMatrix4(M), color, target, ...labelTexture(label, color) }];
+  }), [hm, route, cps, M, step, t]);
   useEffect(() => () => items.forEach((b) => b.texture.dispose()), [items]);
   return (
     <>
@@ -337,6 +341,7 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, width: number, maxLin
 const HUD_H = 460;
 
 function Hud({ plan, cps, step, progress, cond }: { plan: WorkPlan | null; cps: Checkpoint[]; step: number; progress: number; cond: Conditions | null }) {
+  const { t } = useTranslation();
   const { texture, canvas } = useMemo(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 1024; canvas.height = HUD_H;
@@ -355,13 +360,13 @@ function Hud({ plan, cps, step, progress, cond }: { plan: WorkPlan | null; cps: 
     ctx.beginPath(); ctx.roundRect(4, 4, 1016, HUD_H - 8, 28); ctx.fill();
     ctx.strokeStyle = route ? "#ffb347" : "#9aa4b2"; ctx.lineWidth = 4; ctx.stroke();
     ctx.font = "600 30px system-ui, sans-serif"; ctx.fillStyle = "#9aa4b2";
-    ctx.fillText(route ? "EVA · ACTIVE WORK PLAN" : "EVA HELMET", 36, 58);
+    ctx.fillText(route ? t("astro.eva_active_plan") : t("astro.eva_helmet"), 36, 58);
     if (!plan || !route) {
       ctx.fillStyle = "#fff"; ctx.font = "bold 60px system-ui, sans-serif";
-      ctx.fillText("Standby", 36, 150);
+      ctx.fillText(t("astro.standby"), 36, 150);
       ctx.font = "38px system-ui, sans-serif"; ctx.fillStyle = "#e6e6e6";
-      ctx.fillText("Waiting for the ship to start an EVA.", 36, 220);
-      ctx.fillText("Your route appears here on its own.", 36, 275);
+      ctx.fillText(t("astro.waiting_ship"), 36, 220);
+      ctx.fillText(t("astro.route_appears"), 36, 275);
     } else {
       const bearing = legBearing(route, cps, step), total = route.distance_m || 1;
       const left = Math.max(0, total - progress), arrived = left < 1;
@@ -369,15 +374,16 @@ function Hud({ plan, cps, step, progress, cond }: { plan: WorkPlan | null; cps: 
       ctx.fillText(plan.title.slice(0, 40), 36, 112);
       ctx.fillStyle = "#fff"; ctx.font = "bold 50px system-ui, sans-serif";
       if (arrived) {
-        ctx.fillText("Target reached", 36, 180);
+        ctx.fillText(t("astro.target_reached"), 36, 180);
         ctx.font = "34px system-ui, sans-serif"; ctx.fillStyle = "#e6e6e6";
-        wrap(ctx, plan.description || "Carry out the work plan.", 950, 3).forEach((l, i) => ctx.fillText(l, 36, 235 + i * 44));
+        wrap(ctx, plan.description || t("astro.carry_out_plan"), 950, 3).forEach((l, i) => ctx.fillText(l, 36, 235 + i * 44));
       } else {
         const next = cps[step + 1], toNext = Math.max(0, next.along - progress);
-        ctx.fillText(`${next.label === "TARGET" ? "Target" : `Checkpoint ${next.label}`} in ${fmtKm(toNext)}`, 36, 180);
+        const label = next.label === "TARGET" ? t("astro.target") : `${t("astro.cp")} ${next.label}`;
+        ctx.fillText(t("astro.checkpoint_in", { label, dist: fmtKm(toNext) }), 36, 180);
         ctx.font = "38px system-ui, sans-serif"; ctx.fillStyle = "#e6e6e6";
-        ctx.fillText(`Heading ${Math.round(bearing)}° ${compass(bearing)}`, 36, 240);
-        ctx.fillText(`To target ${fmtKm(left)} · ~${fmtDur(route.duration_min * (left / total))}`, 36, 292);
+        ctx.fillText(t("astro.heading", { deg: Math.round(bearing), dir: compass(bearing) }), 36, 240);
+        ctx.fillText(t("astro.to_target", { dist: fmtKm(left), time: fmtDur(route.duration_min * (left / total)) }), 36, 292);
       }
       // progress bar
       ctx.fillStyle = "rgba(255,255,255,0.15)"; ctx.fillRect(36, 340, 952, 14);
@@ -386,10 +392,10 @@ function Hud({ plan, cps, step, progress, cond }: { plan: WorkPlan | null; cps: 
     if (cond) {
       ctx.font = "30px system-ui, sans-serif";
       ctx.fillStyle = cond.doseUSvH > 300 || cond.tau > 3 ? "#ff8a80" : cond.doseUSvH > 80 || cond.tau > 1.5 ? "#fbbf24" : "#9aa4b2";
-      ctx.fillText(`${cond.tempC} °C · wind ${cond.windMs} m/s · dust τ ${cond.tau.toFixed(1)} · ${cond.doseUSvH} µSv/h · LMST ${fmtLmst(cond.time.lmst)}`, 36, 412);
+      ctx.fillText(`${cond.tempC} °C · ${t("alerts.wind")} ${cond.windMs} m/s · ${t("alerts.dust")} ${cond.tau.toFixed(1)} · ${cond.doseUSvH} µSv/h · LMST ${fmtLmst(cond.time.lmst)}`, 36, 412);
     }
     texture.needsUpdate = true;
-  }, [canvas, texture, plan, route, cps, step, tick, cond?.tempC, cond?.windMs, cond?.tau, cond?.doseUSvH, Math.floor((cond?.time.lmst ?? 0) * 60)]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canvas, texture, plan, route, cps, step, tick, cond?.tempC, cond?.windMs, cond?.tau, cond?.doseUSvH, Math.floor((cond?.time.lmst ?? 0) * 60), t, i18n.language]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <mesh renderOrder={30}>
@@ -401,6 +407,7 @@ function Hud({ plan, cps, step, progress, cond }: { plan: WorkPlan | null; cps: 
 
 /** the most important alert, at eye level just above the status panel */
 function AlertPanel({ alert, more }: { alert: Alert; more: number }) {
+  const { t } = useTranslation();
   const { texture, canvas } = useMemo(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 1024; canvas.height = 200;
@@ -419,9 +426,9 @@ function AlertPanel({ alert, more }: { alert: Alert; more: number }) {
     ctx.fillText(`${alert.level === "info" ? "ℹ" : "⚠"} ${alert.title}`.slice(0, 44), 32, 70);
     ctx.fillStyle = "#f2f2f2"; ctx.font = "32px system-ui, sans-serif";
     wrap(ctx, alert.text, 960, 2).forEach((l, i) => ctx.fillText(l, 32, 122 + i * 40));
-    if (more > 0) { ctx.fillStyle = "#9aa4b2"; ctx.font = "26px system-ui, sans-serif"; ctx.fillText(`+${more} more`, 880, 70); }
+    if (more > 0) { ctx.fillStyle = "#9aa4b2"; ctx.font = "26px system-ui, sans-serif"; ctx.fillText(t("alerts.more", { count: more }), 880, 70); }
     texture.needsUpdate = true;
-  }, [canvas, texture, alert.id, alert.level, alert.title, alert.text, more]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canvas, texture, alert.id, alert.level, alert.title, alert.text, more, t, i18n.language]); // eslint-disable-line react-hooks/exhaustive-deps
   const pulse = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
     const m = pulse.current?.material as THREE.MeshBasicMaterial | undefined;

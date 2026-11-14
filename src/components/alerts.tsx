@@ -2,6 +2,7 @@
 // the anomalies on a Leaflet zone map. Used by all three apps so they look and read the same.
 import { Fragment, type ReactNode } from "react";
 import { Circle, Tooltip } from "react-leaflet";
+import { useTranslation } from "react-i18next";
 import { CheckCheck, Info, OctagonAlert, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,7 @@ export const LevelIcon = ({ level, className }: { level: Level; className?: stri
 export function AlertList({ alerts, onAck, max, className, empty }: {
   alerts: Alert[]; onAck?: (a: Alert) => void; max?: number; className?: string; empty?: ReactNode;
 }) {
+  const { t } = useTranslation();
   if (!alerts.length) return empty ? <>{empty}</> : null;
   const shown = max ? alerts.slice(0, max) : alerts;
   return (
@@ -34,11 +36,11 @@ export function AlertList({ alerts, onAck, max, className, empty }: {
             {a.text && <div className="mt-0.5 text-[11px] leading-snug opacity-85">{a.text}</div>}
           </div>
           {onAck && a.ackable && (
-            <Button size="xs" variant="outline" className="h-6 shrink-0 bg-transparent px-2 text-[11px]" onClick={() => onAck(a)}><CheckCheck /> Got it</Button>
+            <Button size="xs" variant="outline" className="h-6 shrink-0 bg-transparent px-2 text-[11px]" onClick={() => onAck(a)}><CheckCheck /> {t("alerts.got_it")}</Button>
           )}
         </div>
       ))}
-      {max && alerts.length > max && <div className="px-1 text-[11px] text-muted-foreground">+{alerts.length - max} more</div>}
+      {max && alerts.length > max && <div className="px-1 text-[11px] text-muted-foreground">{t("alerts.more", { count: alerts.length - max })}</div>}
     </div>
   );
 }
@@ -47,19 +49,20 @@ const tone = (bad: boolean, worse = false) => (worse ? "text-red-300" : bad ? "t
 
 /** the surface conditions in the crew's zone right now */
 export function ConditionsGrid({ c, zone, className }: { c: Conditions; zone: Zone; className?: string }) {
+  const { t } = useTranslation();
   const items: [string, ReactNode, string?][] = [
-    ["Local time", <>{fmtLmst(c.time.lmst)} <span className="text-[10px] font-normal text-muted-foreground">{c.daylight ? "day" : "night"}</span></>],
-    ["Air", `${c.tempC} °C`, tone(c.tempC < -85)],
-    ["Wind", `${c.windMs} m/s`, tone(c.windMs > 14, c.windMs > 22)],
-    ["Dust τ", c.tau.toFixed(1), tone(c.tau > 1.5, c.tau > 3)],
-    ["Radiation", `${c.doseUSvH} µSv/h`, tone(c.doseUSvH > 80, c.doseUSvH > 300)],
-    ["Pressure", `${c.pressurePa} Pa`],
+    [t("alerts.local_time"), <>{fmtLmst(c.time.lmst)} <span className="text-[10px] font-normal text-muted-foreground">{c.daylight ? t("alerts.day") : t("alerts.night")}</span></>],
+    [t("alerts.air"), `${c.tempC} °C`, tone(c.tempC < -85)],
+    [t("alerts.wind"), `${c.windMs} m/s`, tone(c.windMs > 14, c.windMs > 22)],
+    [t("alerts.dust"), c.tau.toFixed(1), tone(c.tau > 1.5, c.tau > 3)],
+    [t("alerts.radiation"), `${c.doseUSvH} µSv/h`, tone(c.doseUSvH > 80, c.doseUSvH > 300)],
+    [t("alerts.pressure"), `${c.pressurePa} Pa`],
   ];
   return (
     <div className={className}>
       <div className="mb-1.5 flex justify-between text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-        <span>Surface now · {zone.name}</span>
-        <span>Sol {Math.floor(c.time.msd)} · {season(c.time.ls, zone.base.lat)}</span>
+        <span>{t("alerts.surface_now", { zone: zone.name })}</span>
+        <span>{t("alerts.sol_season", { sol: Math.floor(c.time.msd), season: season(c.time.ls, zone.base.lat) })}</span>
       </div>
       <dl className="grid grid-cols-3 gap-1.5">
         {items.map(([k, v, cls]) => (
@@ -78,16 +81,18 @@ const SLOT_CLASS: Record<Slot["level"], string> = {
 };
 
 /** the next 24 hours as a bar: green = fine for an EVA, grey = night, amber / red = anomalies */
-export function OutlookBar({ zone, slots, next, title = "Next 24 h" }: { zone: Zone; slots: Slot[]; next?: number | null; title?: string }) {
+export function OutlookBar({ zone, slots, next, title }: { zone: Zone; slots: Slot[]; next?: number | null; title?: string }) {
+  const { t } = useTranslation();
   if (!slots.length) return null;
   const t0 = slots[0].t, span = slots[slots.length - 1].t - t0 || 1;
+  const displayTitle = title ?? t("eva.next_24h");
   return (
     <div>
       <div className="mb-1 flex justify-between text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-        <span>{title}</span>
+        <span>{displayTitle}</span>
         {next !== undefined && (
           <span className={next == null ? "text-amber-300" : "text-emerald-300"}>
-            {next == null ? "no safe window" : next - t0 < 60_000 ? "safe to start now" : `safe from LMST ${fmtLmst(marsTime(next, zone.base.lon).lmst)} (in ${fmtDur((next - t0) / 60_000)})`}
+            {next == null ? t("eva.no_safe_window") : next - t0 < 60_000 ? t("eva.safe_to_start_now") : t("eva.safe_from", { time: fmtLmst(marsTime(next, zone.base.lon).lmst), dur: fmtDur((next - t0) / 60_000) })}
           </span>
         )}
       </div>
@@ -96,7 +101,7 @@ export function OutlookBar({ zone, slots, next, title = "Next 24 h" }: { zone: Z
         {next != null && <div className="absolute inset-y-0 w-0.5 bg-white" style={{ left: `${((next - t0) / span) * 100}%` }} />}
       </div>
       <div className="mt-0.5 flex justify-between text-[9px] text-muted-foreground tabular-nums">
-        {[0, 6, 12, 18, 24].map((h) => <span key={h}>{h === 0 ? "now" : `+${h} h`}</span>)}
+        {[0, 6, 12, 18, 24].map((h) => <span key={h}>{h === 0 ? t("eva.now_slot") : t("eva.plus_hours", { h })}</span>)}
       </div>
     </div>
   );
@@ -104,14 +109,15 @@ export function OutlookBar({ zone, slots, next, title = "Next 24 h" }: { zone: Z
 
 /** the pre-EVA safety check for a route */
 export function EvaCheckView({ check }: { check: EvaCheck }) {
+  const { t } = useTranslation();
   return (
     <div className={cn("rounded-lg border px-2.5 py-2 text-xs", check.level === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : LEVEL_CLASS[check.level])}>
       <div className="flex items-center gap-1.5 font-semibold">
         {check.level === "ok" ? <CheckCheck className="size-4" /> : <LevelIcon level={check.level} />}
-        {check.level === "ok" ? "Safe to go now" : check.level === "critical" ? "Not safe to go now" : "Go with care"}
+        {check.level === "ok" ? t("eva.safe_to_go") : check.level === "critical" ? t("eva.not_safe_to_go") : t("eva.go_with_care")}
       </div>
       <div className="mt-1 text-[11px] opacity-85">
-        EVA ~{fmtDur(check.needMin)} (there, {fmtDur(60)} work, back) · dose ~{check.doseMSv.toFixed(2)} mSv
+        {t("eva.check_summary", { time: fmtDur(check.needMin), work: t("eva.work_time_default"), dose: check.doseMSv.toFixed(2) })}
       </div>
       {check.issues.length > 0 && (
         <ul className="mt-1 list-disc pl-4 text-[11px] opacity-90">
@@ -128,16 +134,20 @@ export function EvaCheckView({ check }: { check: EvaCheck }) {
  * circle over it carries the tooltip
  */
 export function HazardAreas({ events, zoneId, now }: { events: MarsEvent[]; zoneId: string; now: number }) {
+  const { t, i18n } = useTranslation();
+  const timeLoc = i18n.language === "kk" ? "kk-KZ" : i18n.language === "ru" ? "ru-RU" : "en-US";
   return (
     <>
       {areaHazards(events, zoneId, now, now + 12 * 3600_000).map((e) => {
         const on = isActive(e, now);
+        const untilStr = e.ends_at ? t("alerts.active_until", { time: new Date(e.ends_at).toLocaleTimeString(timeLoc, { timeStyle: "short" }) }) : t("alerts.active_now");
+        const fromStr = t("alerts.starts_from", { time: new Date(e.starts_at).toLocaleTimeString(timeLoc, { timeStyle: "short" }) });
         return (
           <Fragment key={e.id}>
             <StormCanvas e={e} active={on} />
             <Circle center={[e.lat!, e.lon!]} radius={e.radius_m!} interactive pathOptions={{ stroke: false, fillOpacity: 0 }}>
               <Tooltip direction="top" sticky>
-                <b>{eventLabel(e)}</b> · {on ? (e.ends_at ? `until ${new Date(e.ends_at).toLocaleTimeString([], { timeStyle: "short" })}` : "active") : `from ${new Date(e.starts_at).toLocaleTimeString([], { timeStyle: "short" })}`}
+                <b>{eventLabel(e)}</b> · {on ? untilStr : fromStr}
               </Tooltip>
             </Circle>
           </Fragment>

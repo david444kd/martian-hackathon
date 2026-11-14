@@ -4,15 +4,20 @@
 import { reliefCanvas } from "../lib/relief";
 import type { Heightmap } from "../lib/zones";
 import { LEVEL_COLOR } from "../components/levels";
-import { fmtDur, fmtKm } from "../lib/geo";
+import { compass, fmtDur, fmtKm } from "../lib/geo";
 import { toLocal, type P2 } from "./frame";
 import { drawStorm, seedOf } from "../lib/stormArt";
 import type { EvaRuntime } from "./runtime";
 import type { EvaView } from "./useEva";
+import i18n from "../i18n";
+
+/** translation for canvas text (no React here; `t` is the time in drawXrHud) */
+const tr = (key: string, opts: Record<string, unknown> = {}) => i18n.t(key, opts) as string;
+const status = (s: string) => tr(`evahud.status_${s.toLowerCase()}`);
 
 export const ROUTE_OUT = "#ffc46b", ROUTE_BACK = "#5fd8ff";
-const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-export const compass = (deg: number) => COMPASS[Math.round(deg / 45) % 8];
+/** N / NE / … in the current language (the same list as the rest of the app) */
+export { compass };
 
 /** the map: `span` metres across, centred on the astronaut */
 export function drawMap(ctx: CanvasRenderingContext2D, hm: Heightmap, v: EvaView, rt: EvaRuntime, home: P2, x: number, y: number, size: number, span = 1600) {
@@ -63,7 +68,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, hm: Heightmap, v: EvaView
   ctx.beginPath(); ctx.arc(cxm, cym, size / 40, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   // north and scale
   ctx.fillStyle = "#e7e2d6"; ctx.font = `600 ${Math.round(size / 13)}px system-ui, sans-serif`; ctx.textAlign = "center";
-  ctx.fillText("N", x + size / 2, y + size / 11);
+  ctx.fillText(compass(0), x + size / 2, y + size / 11);
   ctx.textAlign = "left"; ctx.font = `${Math.round(size / 17)}px system-ui, sans-serif`;
   ctx.fillText(`${fmtKm(span / 4)}`, x + size * 0.06, y + size * 0.93);
   ctx.fillRect(x + size * 0.06, y + size * 0.95, size / 4, 2);
@@ -116,21 +121,21 @@ export function drawXrHud(ctx: CanvasRenderingContext2D, hm: Heightmap, v: EvaVi
   }
   // suit (top left)
   panel(ctx, 40, 40, 360, 200, s.status === "NOMINAL" ? "#7be08a" : s.status === "CAUTION" ? "#fbbf24" : "#ef4444");
-  ctx.fillStyle = "#9fb7b0"; ctx.font = "600 22px system-ui, sans-serif"; ctx.fillText(`SUIT · ${s.status}`, 64, 78);
+  ctx.fillStyle = "#9fb7b0"; ctx.font = "600 22px system-ui, sans-serif"; ctx.fillText(`${tr("evahud.suit_upper")} · ${status(s.status)}`, 64, 78);
   ctx.fillStyle = s.o2Pct < 30 ? "#ffb4a8" : "#e9f4f0"; ctx.font = "600 52px system-ui, sans-serif"; ctx.fillText(`O₂ ${s.o2Pct.toFixed(0)}%`, 64, 138);
   ctx.font = "24px system-ui, sans-serif"; ctx.fillStyle = "#cfe0da";
-  ctx.fillText(`${fmtDur(s.remainingMin)} left · ${s.kpa.toFixed(1)} kPa`, 64, 176);
-  ctx.fillText(`Pulse ${s.pulse.toFixed(0)} · CO₂ ${s.co2.toFixed(1)} mmHg`, 64, 212);
+  ctx.fillText(`${tr("evahud.time_left", { time: fmtDur(s.remainingMin) })} · ${s.kpa.toFixed(1)} kPa`, 64, 176);
+  ctx.fillText(`${tr("evahud.pulse")} ${s.pulse.toFixed(0)} · CO₂ ${s.co2.toFixed(1)} mmHg`, 64, 212);
   // navigation (top right)
   panel(ctx, W - 440, 40, 400, 200, v.mode === "return" ? ROUTE_BACK : ROUTE_OUT);
   ctx.fillStyle = "#9fb7b0"; ctx.font = "600 22px system-ui, sans-serif";
-  ctx.fillText(v.mode === "return" ? "RETURN TO BASE" : v.mode === "out" ? "OUTBOUND · " + (v.plan?.title ?? "").slice(0, 18) : v.mode === "complete" ? "AT BASE" : "STANDBY", W - 416, 78);
+  ctx.fillText(v.mode === "return" ? tr("evahud.return_to_base_upper") : v.mode === "out" ? tr("evahud.outbound_upper") + " · " + (v.plan?.title ?? "").slice(0, 18) : v.mode === "complete" ? tr("evahud.at_base_upper") : tr("evahud.standby_upper"), W - 416, 78);
   ctx.fillStyle = "#f2efe6"; ctx.font = "600 46px system-ui, sans-serif";
   if (v.guide) ctx.fillText(`${fmtKm(v.left)}  ${Math.round(v.guide.bearing)}° ${compass(v.guide.bearing)}`, W - 416, 136);
-  else ctx.fillText(v.mode === "standby" ? "No active EVA" : v.arrived ? "Arrived" : "—", W - 416, 136);
+  else ctx.fillText(v.mode === "standby" ? tr("evahud.no_active_eva") : v.arrived ? tr("evahud.arrived") : "—", W - 416, 136);
   ctx.font = "24px system-ui, sans-serif"; ctx.fillStyle = "#cfe0da";
-  if (v.route) ctx.fillText(`~${fmtDur(v.etaMin)} · off route ${Math.round(v.offRoute)} m`, W - 416, 176);
-  ctx.fillText(`Base ${fmtKm(v.toBase)} ${compass(v.bearingBase)}${rt.autopilot ? " · AUTOPILOT" : ""}`, W - 416, 212);
+  if (v.route) ctx.fillText(`~${fmtDur(v.etaMin)} · ${tr("evahud.off_route_m", { m: Math.round(v.offRoute) })}`, W - 416, 176);
+  ctx.fillText(`${tr("evahud.base")} ${fmtKm(v.toBase)} ${compass(v.bearingBase)}${rt.autopilot ? ` · ${tr("evahud.autopilot_upper")}` : ""}`, W - 416, 212);
   // heading tape (top centre)
   ctx.fillStyle = "rgba(10,22,28,0.55)"; ctx.beginPath(); ctx.roundRect(W / 2 - 230, 40, 460, 64, 16); ctx.fill();
   const hd = rt.pose.heading;
@@ -158,9 +163,9 @@ export function drawXrHud(ctx: CanvasRenderingContext2D, hm: Heightmap, v: EvaVi
   if (v.cond) {
     panel(ctx, W - 440, H - 150, 400, 110);
     ctx.font = "24px system-ui, sans-serif"; ctx.fillStyle = v.storm > 0.4 ? "#ffcf8a" : "#cfe0da";
-    ctx.fillText(`${v.cond.tempC} °C · wind ${v.cond.windMs} m/s · τ ${v.cond.tau.toFixed(1)}`, W - 416, H - 104);
+    ctx.fillText(`${v.cond.tempC} °C · ${tr("evahud.wind")} ${v.cond.windMs} m/s · τ ${v.cond.tau.toFixed(1)}`, W - 416, H - 104);
     ctx.fillStyle = v.cond.doseUSvH > 80 ? "#ffb4a8" : "#cfe0da";
-    ctx.fillText(`${v.cond.doseUSvH} µSv/h · dose ${s.doseUSv.toFixed(0)} µSv`, W - 416, H - 66);
+    ctx.fillText(`${v.cond.doseUSvH} µSv/h · ${tr("evahud.dose")} ${s.doseUSv.toFixed(0)} µSv`, W - 416, H - 66);
   }
   // alert / call (lower centre)
   const a = v.top;
@@ -168,10 +173,10 @@ export function drawXrHud(ctx: CanvasRenderingContext2D, hm: Heightmap, v: EvaVi
     const failed = v.recall.state === "failed";
     panel(ctx, W / 2 - 380, H - 300, 760, 170, "#ef4444");
     ctx.fillStyle = "#ff8f84"; ctx.font = "700 44px system-ui, sans-serif"; ctx.textAlign = "center";
-    ctx.fillText(failed ? "HOLD POSITION" : "⚠ RETURN TO BASE", W / 2, H - 238);
+    ctx.fillText(failed ? tr("evahud.hold_position") : `⚠ ${tr("evahud.return_to_base_upper")}`, W / 2, H - 238);
     ctx.font = "26px system-ui, sans-serif"; ctx.fillStyle = "#f3e9e6";
-    ctx.fillText(failed ? "No safe return route. Contact the ship." : `${v.recall.reason || v.route?.reason || "Recall"} · follow the blue markers`, W / 2, H - 194);
-    ctx.fillText(failed ? "" : `${fmtKm(v.left)} to the airlock`, W / 2, H - 156);
+    ctx.fillText(failed ? tr("evahud.no_return_contact_ship") : `${v.recall.reason || v.route?.reason || tr("evahud.recall")} · ${tr("evahud.follow_blue")}`, W / 2, H - 194);
+    ctx.fillText(failed ? "" : tr("evahud.to_airlock", { dist: fmtKm(v.left) }), W / 2, H - 156);
     ctx.textAlign = "left";
   } else if (a) {
     const c = LEVEL_COLOR[a.level];
@@ -180,16 +185,16 @@ export function drawXrHud(ctx: CanvasRenderingContext2D, hm: Heightmap, v: EvaVi
     ctx.fillText(`${a.level === "info" ? "◉" : "⚠"} ${a.title}`.slice(0, 46), W / 2 - 350, H - 248);
     ctx.fillStyle = "#eef0ea"; ctx.font = "24px system-ui, sans-serif";
     wrap(ctx, a.text, 700, 2).forEach((l, i) => ctx.fillText(l, W / 2 - 350, H - 210 + i * 32));
-    ctx.fillStyle = "#a9c6bd"; ctx.font = "20px system-ui, sans-serif"; ctx.fillText("A: acknowledge", W / 2 - 350, H - 148);
+    ctx.fillStyle = "#a9c6bd"; ctx.font = "20px system-ui, sans-serif"; ctx.fillText(tr("evahud.xr_ack"), W / 2 - 350, H - 148);
   } else if (v.mode === "complete") {
     panel(ctx, W / 2 - 300, H - 280, 600, 120, "#7be08a");
     ctx.fillStyle = "#c9f5d3"; ctx.font = "600 40px system-ui, sans-serif"; ctx.textAlign = "center";
-    ctx.fillText("Airlock reached · EVA complete", W / 2, H - 208); ctx.textAlign = "left";
+    ctx.fillText(tr("evahud.airlock_complete"), W / 2, H - 208); ctx.textAlign = "left";
   } else if (v.arrived && v.mode === "out") {
     panel(ctx, W / 2 - 300, H - 280, 600, 120, "#7be08a");
     ctx.fillStyle = "#c9f5d3"; ctx.font = "600 40px system-ui, sans-serif"; ctx.textAlign = "center";
-    ctx.fillText("Target reached", W / 2, H - 222);
-    ctx.font = "24px system-ui, sans-serif"; ctx.fillStyle = "#e6efe9"; ctx.fillText((v.plan?.description || "Carry out the work plan.").slice(0, 60), W / 2, H - 186); ctx.textAlign = "left";
+    ctx.fillText(tr("evahud.target_reached"), W / 2, H - 222);
+    ctx.font = "24px system-ui, sans-serif"; ctx.fillStyle = "#e6efe9"; ctx.fillText((v.plan?.description || tr("evahud.carry_out_plan")).slice(0, 60), W / 2, H - 186); ctx.textAlign = "left";
   }
   if (rt.pose.blocked) {
     ctx.fillStyle = "rgba(60,20,10,0.8)"; ctx.beginPath(); ctx.roundRect(W / 2 - 260, 150, 520, 50, 14); ctx.fill();
@@ -197,6 +202,6 @@ export function drawXrHud(ctx: CanvasRenderingContext2D, hm: Heightmap, v: EvaVi
   }
   // controls hint
   ctx.fillStyle = "rgba(220,235,230,0.55)"; ctx.font = "18px system-ui, sans-serif"; ctx.textAlign = "center";
-  ctx.fillText("L-stick walk · L-grip fast · R-stick turn · R-trigger teleport · A ack · X autopilot · B exit", W / 2, H - 30);
+  ctx.fillText(tr("evahud.xr_controls"), W / 2, H - 30);
   ctx.textAlign = "left";
 }

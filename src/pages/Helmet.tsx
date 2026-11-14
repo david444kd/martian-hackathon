@@ -6,6 +6,7 @@
 // reaches your route, the EVA is aborted: alarm, RETURN TO BASE, and a new route back to the base.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import type * as THREE from "three";
 import { Glasses, HardHat, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import { SuitModel } from "../eva/suit";
 import { useEva, type EvaView } from "../eva/useEva";
 import { EvaHud } from "../eva/EvaHud";
 import { toLocal } from "../eva/frame";
+import { LanguageSwitcher } from "../components/LanguageSwitcher";
 
 const EvaScene = lazy(() => import("../eva/EvaScene").then((m) => ({ default: m.EvaScene })));
 
@@ -28,13 +30,15 @@ const LAST_CREW = "mars-ops.helmet.crew";
 const SPEED = Number(new URLSearchParams(location.search).get("speed")) || 8;
 
 export function HelmetPicker() {
+  const { t } = useTranslation();
   const last = load<string | null>(LAST_CREW, null);
   const crews = useCrews();
   if (last && crews.data?.some((c) => c.id === last)) return <Navigate to={`/helmet/${last}`} replace />;
-  return <CrewPicker base="/helmet" product="EVA Helmet" icon={<HardHat />} question="Whose helmet is this?" />;
+  return <CrewPicker base="/helmet" product={t("helmet.brand")} icon={<HardHat />} question={t("picker.helmetQuestion")} />;
 }
 
 export function Helmet() {
+  const { t } = useTranslation();
   const { crewId } = useParams();
   useEffect(() => { if (crewId) save(LAST_CREW, crewId); }, [crewId]);
   const crewQ = useCrew(crewId), plans = usePlans(crewId);
@@ -77,7 +81,7 @@ export function Helmet() {
       const s = await navigator.xr.requestSession("immersive-vr", { requiredFeatures: ["local-floor"], optionalFeatures: ["bounded-floor"] });
       await gl.xr.setSession(s);
       setErr(null);
-    } catch (e) { setErr(e instanceof DOMException && e.name === "NotAllowedError" ? "VR permission was declined. Allow immersive VR and try again." : e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(e instanceof DOMException && e.name === "NotAllowedError" ? t("helmet.vr_declined") : e instanceof Error ? e.message : String(e)); }
   }
   function begin() { audio.start(); setBegun(true); glRef.current?.domElement.focus(); }
 
@@ -104,25 +108,26 @@ export function Helmet() {
 
       {!begun && (
         <div className="absolute inset-0 z-20 grid place-items-center bg-black/55 p-6 backdrop-blur-sm">
+          <div className="absolute top-4 right-4"><LanguageSwitcher /></div>
           <div className="max-w-md text-center">
             <div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-primary/15 text-primary"><HardHat className="size-7" /></div>
-            <div className="text-xs font-semibold tracking-[0.25em] text-muted-foreground uppercase">EVA Helmet · {crew?.name ?? "…"}</div>
-            <h1 className="mt-2 font-heading text-3xl font-semibold">{plan ? plan.title : "Suit check complete"}</h1>
+            <div className="text-xs font-semibold tracking-[0.25em] text-muted-foreground uppercase">{t("helmet.brand")} · {crew?.name ?? "…"}</div>
+            <h1 className="mt-2 font-heading text-3xl font-semibold">{plan ? plan.title : t("helmet.suit_check_complete")}</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              {plan ? "The ship has started your EVA. Follow the markers on the ground; mission control sees where you are." : "No EVA started yet. You can walk around the base; the route appears when the ship starts the EVA."}
+              {plan ? t("helmet.intro_with_plan") : t("helmet.intro_no_plan")}
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
-              <Button size="lg" className="h-12 rounded-xl px-6" disabled={!v} onClick={begin}><Play /> Begin on this screen</Button>
-              {vrOk && <Button size="lg" variant="outline" className="h-12 rounded-xl px-6" disabled={!v} onClick={enterVr}><Glasses /> Enter VR</Button>}
+              <Button size="lg" className="h-12 rounded-xl px-6" disabled={!v} onClick={begin}><Play /> {t("helmet.begin_on_screen")}</Button>
+              {vrOk && <Button size="lg" variant="outline" className="h-12 rounded-xl px-6" disabled={!v} onClick={enterVr}><Glasses /> {t("helmet.enter_vr")}</Button>}
             </div>
-            {!v && <p className="mt-3 text-xs text-muted-foreground">Loading the surface…</p>}
-            <p className="mt-4 text-xs text-muted-foreground">Sound: life support, breathing, radio and alarms. Suit readouts are simulated.</p>
-            {err && <div className="mt-3"><ErrorNote error={`Couldn't start VR: ${err}`} /></div>}
+            {!v && <p className="mt-3 text-xs text-muted-foreground">{t("helmet.loading_surface")}</p>}
+            <p className="mt-4 text-xs text-muted-foreground">{t("helmet.sound_note")}</p>
+            {err && <div className="mt-3"><ErrorNote error={t("helmet.cant_start_vr", { err })} /></div>}
             <div className="mt-3"><ErrorNote error={plans.error ?? crewQ.error} /></div>
           </div>
         </div>
       )}
-      {begun && err && <div className="absolute bottom-24 left-1/2 z-20 w-[min(420px,90%)] -translate-x-1/2"><ErrorNote error={`Couldn't start VR: ${err}`} /></div>}
+      {begun && err && <div className="absolute bottom-24 left-1/2 z-20 w-[min(420px,90%)] -translate-x-1/2"><ErrorNote error={t("helmet.cant_start_vr", { err })} /></div>}
     </div>
   );
 }

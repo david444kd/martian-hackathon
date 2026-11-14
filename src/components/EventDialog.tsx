@@ -3,6 +3,7 @@
 // control can raise anything; the ship raises messages and marks hazards in its own zone.
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { Circle, Marker, Tooltip } from "react-leaflet";
 import { Dices } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,14 +22,13 @@ import { EVENT_KINDS, LEVELS, type Crew, type EventKind, type Level, type NewEve
 import { crewHome, inZone, toLL, toPx, useHeightmap, useZones } from "../lib/zones";
 import { fmtKm } from "../lib/geo";
 
-const LEVEL_LABEL: Record<Level, string> = { info: "Info", warning: "Warning", critical: "Critical" };
-
 export function EventDialog({ open, onOpenChange, crews, source, crew }: {
   open: boolean; onOpenChange: (o: boolean) => void; crews: Crew[];
   source: NewEvent["source"];
   /** raised by this crew's ship: messages go to it, areas are in its zone */
   crew?: Crew;
 }) {
+  const { t } = useTranslation();
   const zones = useZones();
   const kinds = (Object.keys(EVENT_KINDS) as EventKind[]).filter((k) => !crew || k !== "solar_storm");
   const [kind, setKind] = useState<EventKind>(crew ? "message" : "dust_storm");
@@ -70,6 +70,7 @@ export function EventDialog({ open, onOpenChange, crews, source, crew }: {
     if (kind === "message" && !text.trim()) return;
     const starts = Date.now() + startIn * 60_000;
     const target = kind === "message" && to !== "all" ? crews.find((c) => c.id === to) : undefined;
+    const defaultText = t(`event_kinds.${kind}.text`, { defaultValue: meta.text });
     const row: NewEvent = {
       kind, level, source,
       zone: meta.area ? zoneId : target?.zone ?? null,
@@ -80,11 +81,12 @@ export function EventDialog({ open, onOpenChange, crews, source, crew }: {
       starts_at: new Date(starts).toISOString(),
       ends_at: duration > 0 ? new Date(starts + duration * 60_000).toISOString() : null,
       title: title.trim(),
-      text: text.trim() || meta.text,
+      text: text.trim() || defaultText,
     };
     create.mutate(row, {
       onSuccess: () => {
-        toast.success(kind === "message" ? "Message sent" : startIn ? `${meta.label} forecast` : `${meta.label} raised`);
+        const kindLabel = t(`event_kinds.${kind}.label`, { defaultValue: meta.label });
+        toast.success(kind === "message" ? t("dialogs.message_sent_toast") : startIn ? t("dialogs.forecast_raised_toast", { label: kindLabel }) : t("dialogs.event_raised_toast", { label: kindLabel }));
         setCenter(null); setTitle(""); setText(""); setStartIn(0);
         onOpenChange(false);
       },
@@ -97,26 +99,26 @@ export function EventDialog({ open, onOpenChange, crews, source, crew }: {
         <form onSubmit={submit} className={cn("grid gap-5", meta.area && "md:grid-cols-[340px_1fr]")}>
           <div className="flex flex-col gap-4">
             <DialogHeader>
-              <DialogTitle>{crew ? "Alert / hazard" : "New event"}</DialogTitle>
+              <DialogTitle>{crew ? t("dialogs.alert_hazard_title") : t("dialogs.new_event_title")}</DialogTitle>
               <DialogDescription>
-                {crew ? "Message the helmet or mark a hazard: mission control sees it too." : "Seen at once on the globe, by the ships and in the helmets."}
+                {crew ? t("dialogs.event_desc_ship") : t("dialogs.event_desc_dispatch")}
               </DialogDescription>
             </DialogHeader>
             <FieldGroup>
               <div className="grid grid-cols-[1fr_130px] gap-3">
                 <Field>
-                  <FieldLabel>Type</FieldLabel>
+                  <FieldLabel>{t("dialogs.type_label")}</FieldLabel>
                   <Select value={kind} onValueChange={(v) => pickKind(v as EventKind)}>
                     <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>{kinds.map((k) => <SelectItem key={k} value={k}>{EVENT_KINDS[k].label}</SelectItem>)}</SelectContent>
+                    <SelectContent>{kinds.map((k) => <SelectItem key={k} value={k}>{t(`event_kinds.${k}.label`, { defaultValue: EVENT_KINDS[k].label })}</SelectItem>)}</SelectContent>
                   </Select>
                 </Field>
                 <Field>
-                  <FieldLabel>Level</FieldLabel>
+                  <FieldLabel>{t("dialogs.level_label")}</FieldLabel>
                   <Select value={level} onValueChange={(v) => setLevel(v as Level)}>
                     <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {LEVELS.map((l) => <SelectItem key={l} value={l}><span className="size-2 rounded-full" style={{ background: LEVEL_COLOR[l] }} />{LEVEL_LABEL[l]}</SelectItem>)}
+                      {LEVELS.map((l) => <SelectItem key={l} value={l}><span className="size-2 rounded-full" style={{ background: LEVEL_COLOR[l] }} />{t(`levels.${l}`)}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </Field>
@@ -124,11 +126,11 @@ export function EventDialog({ open, onOpenChange, crews, source, crew }: {
 
               {kind === "message" && !crew && (
                 <Field>
-                  <FieldLabel>To</FieldLabel>
+                  <FieldLabel>{t("dialogs.to_label")}</FieldLabel>
                   <Select value={to} onValueChange={setTo}>
                     <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All crews</SelectItem>
+                      <SelectItem value="all">{t("dialogs.all_crews_option")}</SelectItem>
                       {crews.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
@@ -136,7 +138,7 @@ export function EventDialog({ open, onOpenChange, crews, source, crew }: {
               )}
               {meta.area && !crew && (
                 <Field>
-                  <FieldLabel>Zone</FieldLabel>
+                  <FieldLabel>{t("dialogs.zone_label")}</FieldLabel>
                   <Select value={zoneId} onValueChange={(v) => { setZoneId(v); setCenter(null); }}>
                     <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>{zones.data?.map((z) => <SelectItem key={z.id} value={z.id}>{z.name}</SelectItem>)}</SelectContent>
@@ -145,41 +147,41 @@ export function EventDialog({ open, onOpenChange, crews, source, crew }: {
               )}
               {meta.area && (
                 <Field>
-                  <FieldLabel htmlFor="ev-radius">Radius · {fmtKm(radius)}</FieldLabel>
+                  <FieldLabel htmlFor="ev-radius">{t("dialogs.radius_label", { dist: fmtKm(radius) })}</FieldLabel>
                   <input id="ev-radius" type="range" min={100} max={4000} step={50} value={radius} onChange={(e) => setRadius(Number(e.target.value))} className="accent-primary" />
-                  <FieldDescription>{center ? "Click the map to move the centre." : <span className="text-primary">Click the map to place it.</span>}</FieldDescription>
+                  <FieldDescription>{center ? t("dialogs.click_map_move_center") : <span className="text-primary">{t("dialogs.click_map_place_center")}</span>}</FieldDescription>
                 </Field>
               )}
 
               {kind === "message" && (
                 <Field>
-                  <FieldLabel htmlFor="ev-title">Subject</FieldLabel>
-                  <Input id="ev-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Return to the ship" />
+                  <FieldLabel htmlFor="ev-title">{t("dialogs.subject_label")}</FieldLabel>
+                  <Input id="ev-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("dialogs.subject_placeholder")} />
                 </Field>
               )}
               <Field>
-                <FieldLabel htmlFor="ev-text">{kind === "message" ? "Message" : "Note"}</FieldLabel>
-                <Textarea id="ev-text" rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={meta.text || "What the crew should do"} required={kind === "message"} />
+                <FieldLabel htmlFor="ev-text">{kind === "message" ? t("dialogs.message_label") : t("dialogs.note_label")}</FieldLabel>
+                <Textarea id="ev-text" rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={t(`event_kinds.${kind}.text`, { defaultValue: meta.text || t("dialogs.message_placeholder") })} required={kind === "message"} />
               </Field>
 
               <div className="grid grid-cols-2 gap-3">
                 <Field>
-                  <FieldLabel htmlFor="ev-start">Starts in, min</FieldLabel>
+                  <FieldLabel htmlFor="ev-start">{t("dialogs.starts_in_label")}</FieldLabel>
                   <Input id="ev-start" type="number" min={0} step={10} value={startIn} onChange={(e) => setStartIn(Math.max(0, Number(e.target.value)))} />
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="ev-dur">Lasts, min</FieldLabel>
+                  <FieldLabel htmlFor="ev-dur">{t("dialogs.lasts_label")}</FieldLabel>
                   <Input id="ev-dur" type="number" min={0} step={10} value={duration} onChange={(e) => setDuration(Math.max(0, Number(e.target.value)))} />
                 </Field>
               </div>
-              <FieldDescription>{startIn > 0 ? "Starts later: shown as a forecast until then." : "Starts now."} {duration === 0 && "No end: stays until someone ends it."}</FieldDescription>
+              <FieldDescription>{startIn > 0 ? t("dialogs.starts_later_desc") : t("dialogs.starts_now_desc")} {duration === 0 && t("dialogs.no_end_desc")}</FieldDescription>
             </FieldGroup>
             <ErrorNote error={create.error} />
             <DialogFooter className="mt-auto">
-              {meta.area && <Button type="button" variant="ghost" className="mr-auto" onClick={randomize}><Dices /> Random</Button>}
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              {meta.area && <Button type="button" variant="ghost" className="mr-auto" onClick={randomize}><Dices /> {t("dialogs.random_btn")}</Button>}
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
               <Button type="submit" disabled={create.isPending || (meta.area && !center) || (kind === "message" && !text.trim())}>
-                {kind === "message" ? "Send" : startIn > 0 ? "Forecast" : "Raise"}
+                {kind === "message" ? t("dialogs.send_btn") : startIn > 0 ? t("dialogs.forecast_btn") : t("dialogs.raise_btn")}
               </Button>
             </DialogFooter>
           </div>
@@ -193,7 +195,7 @@ export function EventDialog({ open, onOpenChange, crews, source, crew }: {
               })}
               {center && <Circle center={center} radius={radius} pathOptions={{ color: LEVEL_COLOR[level], fillColor: LEVEL_COLOR[level], fillOpacity: 0.25, weight: 2 }} />}
             </ZoneLeafletMap>
-          ) : <div className="grid h-[70vh] place-items-center text-sm text-muted-foreground">Loading map…</div>)}
+          ) : <div className="grid h-[70vh] place-items-center text-sm text-muted-foreground">{t("ship.loading_map")}</div>)}
         </form>
       </DialogContent>
     </Dialog>

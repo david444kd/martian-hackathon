@@ -18,6 +18,7 @@ import { areoid, bearingOf, dist2, pointAlong, polyline, project, toLatLon, toLo
 import type { EvaRuntime } from "./runtime";
 import type { SuitAudio } from "./audio";
 import { SuitModel } from "./suit";
+import i18n from "../i18n";
 
 export const REPORT_MS = 2500;
 /** a hazard this close to the astronaut (beyond its edge) triggers the recall even off the route */
@@ -220,18 +221,18 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
     const reason = eventLabel(recallTrigger);
     setRecall({ state: "computing", reason });
     audio.alarm("critical");
-    setTimeout(() => audio.line(`abort-${recallTrigger.kind}`, `${short(recallTrigger)} впереди. Прерываем выход, возвращайся на базу.`, true), 1900);
+    setTimeout(() => audio.line(`abort-${recallTrigger.kind}`, say("abort_ahead", { hazard: short(recallTrigger) }), true), 1900);
     const avoid = avoidList(areaHazards(evs, zone.id, now, now + 6 * 3600_000));
     returnRoute(hm, view.at, home, avoid, reason)
       .then((r) => updatePlan.mutateAsync({ id: plan.id, patch: { route: r, progress_m: 0 } }).then(() => r))
       .then((r) => {
         setRecall({ state: "sent", reason });
-        setTimeout(() => audio.line("route-home", `Маршрут домой есть. ${spokenDist(r.distance_m)}. Иди по синим меткам.`), 600);
+        setTimeout(() => audio.line("route-home", say("route_home", { dist: spokenDist(r.distance_m) })), 600);
       })
       .catch((e: unknown) => {
         setRecall({ state: "failed", reason, error: e instanceof Error ? e.message : String(e) });
         audio.alarm("critical");
-        audio.line("no-way", "Чистого пути назад нет. Стой на месте, ждём.", true);
+        audio.line("no-way", say("no_way"), true);
       });
   }, [recallTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -241,14 +242,14 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
     if (lastStamp.current !== undefined && stamp && stamp !== lastStamp.current) {
       if (isReturn(route)) {
         if (recall.state !== "sent" && recall.state !== "computing") {
-          setRecall({ state: "sent", reason: route?.reason ?? "Recall" });
+          setRecall({ state: "sent", reason: route?.reason ?? i18n.t("evahud.recall") });
           audio.radio(); audio.alarm("critical");
-          setTimeout(() => audio.line("recall-ship", "Это корабль. Возвращайся, маршрут уже у тебя.", true), 800);
+          setTimeout(() => audio.line("recall-ship", say("recall_ship"), true), 800);
         }
       } else {
         setRecall({ state: "idle", reason: "" });
         audio.radio();
-        setTimeout(() => audio.line("new-route", "Новый маршрут у тебя."), 700);
+        setTimeout(() => audio.line("new-route", say("new_route")), 700);
       }
     }
     if (!isReturn(route) && recall.state === "sent") setRecall({ state: "idle", reason: "" });
@@ -267,7 +268,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
     const reason = eventLabel(near);
     setRecall({ state: "computing", reason });
     audio.alarm("critical");
-    setTimeout(() => audio.line(`abort-${near.kind}`, `${short(near)} рядом. Возвращайся на базу.`, true), 1900);
+    setTimeout(() => audio.line(`abort-${near.kind}`, say("abort_near", { hazard: short(near) }), true), 1900);
     returnRoute(hm, v.at, home, avoidList(areaHazards(evs, zone.id, now, now + 6 * 3600_000)), reason)
       .then((r) => { setRecall({ state: "sent", reason }); setLocalRoute(r); })
       .catch((e: unknown) => setRecall({ state: "failed", reason, error: e instanceof Error ? e.message : String(e) }));
@@ -278,7 +279,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
   useEffect(() => {
     if (arrived && !plan && mode === "complete") {
       audio.alarm("info");
-      audio.line("airlock", "Шлюз. С возвращением.");
+      audio.line("airlock", say("airlock"));
       const id = setTimeout(() => { setLocalRoute(null); setRecall({ state: "idle", reason: "" }); }, 8000);
       return () => clearTimeout(id);
     }
@@ -286,11 +287,11 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
     if (mode === "out" && !reachedTarget.current) {
       reachedTarget.current = true;
       audio.alarm("info");
-      audio.line("on-target", "Всё, ты на точке.");
+      audio.line("on-target", say("on_target"));
     }
     if (mode === "complete" && plan.status === "in_progress") {
       audio.alarm("info");
-      audio.line("airlock", "Шлюз. С возвращением.");
+      audio.line("airlock", say("airlock"));
       // recalled before reaching the target: the plan goes back to the ship to be done again
       updatePlan.mutate({ id: plan.id, patch: { status: reachedTarget.current ? "done" : "assigned" } });
     }
@@ -313,19 +314,19 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
     if (t - offSince.current < REROUTE_AFTER_MS || t - lastReroute.current < REROUTE_GAP_MS) return;
     lastReroute.current = t; offSince.current = null;
     setRerouting(true);
-    audio.line("off-route", "Ушёл с маршрута. Перестраиваю.");
+    audio.line("off-route", say("off_route"));
     const avoid = avoidList(areaHazards(evs, zone.id, now, now + 6 * 3600_000));
     const back = isReturn(route);
     const make = back
       ? returnRoute(hm, v.at, home, avoid, route.reason ?? "Recall")
       : generateRoute(hm, v.at, [plan.target_lat, plan.target_lon], avoid).then((r): Route => ({
-        ...r, start: { lat: v.at[0], lon: v.at[1], name: "Rerouted (off route)" }, target: { lat: plan.target_lat, lon: plan.target_lon },
+        ...r, start: { lat: v.at[0], lon: v.at[1], name: i18n.t("evahud.rerouted_off_route") }, target: { lat: plan.target_lat, lon: plan.target_lon },
         generated_at: new Date().toISOString(), mode: route.mode,
       }));
     make
       .then((r) => updatePlan.mutateAsync({ id: plan.id, patch: { route: r, progress_m: 0 } }))
-      .then(() => { if (back) audio.line("route-home-updated", "Маршрут домой обновил."); })
-      .catch(() => audio.line("no-reroute", "Отсюда не проложить. Вернись к линии."))
+      .then(() => { if (back) audio.line("route-home-updated", say("route_home_updated")); })
+      .catch(() => audio.line("no-reroute", say("no_reroute")))
       .finally(() => setRerouting(false));
   }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -373,24 +374,29 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
 const alertKey = (a: Alert) => `${a.id}:${a.level}:${a.title}`;
 
 // Voice lines: short, like real radio calls, not read-out paragraphs (the full text stays on the HUD).
-const SHORT: Record<string, string> = { dust_storm: "Пыльная буря", dust_devil: "Пылевой вихрь", rockfall: "Камнепад", solar_storm: "Солнечная вспышка" };
-const short = (e: MarsEvent) => SHORT[e.kind] ?? "Опасность";
-const spokenDist = (m: number) => (m < 1000 ? `${Math.round(m / 10) * 10} метров` : `${(m / 1000).toFixed(1).replace(".", ",")} километра`);
+// Spoken in the interface language (English by default); the texts are in the `voice` locale section.
+const say = (key: string, opts: Record<string, unknown> = {}) => i18n.t(`voice.${key}`, opts) as string;
+const SPOKEN = ["dust_storm", "dust_devil", "rockfall", "solar_storm"];
+const short = (e: MarsEvent) => say(SPOKEN.includes(e.kind) ? `hazard_${e.kind}` : "hazard_other");
+const spokenDist = (m: number) => {
+  const km = (m / 1000).toFixed(1);
+  return m < 1000 ? say("dist_m", { m: Math.round(m / 10) * 10 }) : say("dist_km", { km: i18n.language === "en" ? km : km.replace(".", ",") });
+};
 /** the recording name for a hazard callout: public/voice/alert-<kind>-<forecast|route|planet|zone>[-critical].mp3 */
 function calloutKey(a: Alert) {
-  const e = a.event, where = a.title.startsWith("Forecast") ? "forecast" : a.title.includes("on the route") ? "route" : !e.lat ? "planet" : "zone";
+  const e = a.event, where = a.scope === "forecast" ? "forecast" : a.scope === "route" ? "route" : !e.lat ? "planet" : "zone";
   return `alert-${e.kind}-${where}${a.level === "critical" && where !== "zone" && where !== "forecast" ? "-critical" : ""}`;
 }
 function callout(a: Alert): string {
   const e = a.event;
   if (e.kind === "message") {
     const first = (e.text || e.title).split(/(?<=[.!?])\s/)[0].slice(0, 90);
-    return `${e.source === "ship" ? "Корабль" : "Центр"}: ${first}`;
+    return say("message", { from: say(e.source === "ship" ? "from_ship" : "from_control"), text: first });
   }
-  if (a.title.startsWith("Forecast")) return `Внимание, скоро ${short(e).toLowerCase()}.`;
-  if (a.title.includes("on the route")) return a.level === "critical" ? `${short(e)} на маршруте!` : `${short(e)} на маршруте.`;
-  if (!e.lat) return a.level === "critical" ? `${short(e)}. Срочно в укрытие.` : `${short(e)}. Будь внимателен.`;
-  return `${short(e)} рядом.`;
+  if (a.scope === "forecast") return say("forecast", { hazard: short(e).toLowerCase() });
+  if (a.scope === "route") return say(a.level === "critical" ? "on_route_critical" : "on_route", { hazard: short(e) });
+  if (!e.lat) return say(a.level === "critical" ? "planet_critical" : "planet", { hazard: short(e) });
+  return say("near", { hazard: short(e) });
 }
 const round1 = (v: number) => Math.round(v * 10) / 10;
 

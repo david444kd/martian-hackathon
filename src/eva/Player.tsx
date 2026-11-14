@@ -12,6 +12,7 @@ import * as THREE from "three";
 import type { Heightmap } from "../lib/zones";
 import { bearingOf, groundY, inside, pointAlong, slopeDeg, type P2 } from "./frame";
 import type { EvaRuntime } from "./runtime";
+import i18n from "../i18n";
 
 export const EYE = 1.68;
 const WALK = 1.3;      // m/s, a suited walk on Mars
@@ -122,18 +123,18 @@ export function Player({ hm, rt }: { hm: Heightmap; rt: EvaRuntime }) {
     let cur = p;
     for (let k = 0; k < n; k++) {
       const next = { x: cur.x + dx / n, z: cur.z + dz / n };
-      if (!inside(hm, next.x, next.z)) return { p: cur, blocked: "Edge of the mapped zone" };
+      if (!inside(hm, next.x, next.z)) return { p: cur, blocked: i18n.t("evahud.blocked_edge") };
       const run = Math.hypot(next.x - cur.x, next.z - cur.z);
       const rise = groundY(hm, next.x, next.z) - groundY(hm, cur.x, cur.z);
       if (run > 0.01 && Math.abs(rise / run) > Math.tan((MAX_STEP_DEG * Math.PI) / 180) && slopeDeg(hm, next.x, next.z) > MAX_STEP_DEG)
-        return { p: cur, blocked: "Too steep: find another way" };
+        return { p: cur, blocked: i18n.t("evahud.blocked_steep") };
       for (const c of rt.solid) {
         const d0 = Math.hypot(cur.x - c.x, cur.z - c.z), d1 = Math.hypot(next.x - c.x, next.z - c.z);
         if (d1 < c.r && d1 < d0) return { p: cur, blocked: "" };
       }
       for (const c of rt.closed) {
         const d0 = Math.hypot(cur.x - c.x, cur.z - c.z), d1 = Math.hypot(next.x - c.x, next.z - c.z);
-        if (d1 < c.r && d1 < d0) return { p: cur, blocked: "Closed area: do not enter" };
+        if (d1 < c.r && d1 < d0) return { p: cur, blocked: i18n.t("evahud.blocked_closed") };
       }
       cur = next;
     }

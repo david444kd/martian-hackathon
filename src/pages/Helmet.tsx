@@ -8,7 +8,7 @@ import type * as THREE from "three";
 import { Glasses, HardHat, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { activePlan, useCrews, useEvents, usePlans, useReportProgress } from "../lib/queries";
+import { activePlan, useCrew, useCrews, useEvents, usePlans, useReportProgress } from "../lib/queries";
 import type { WorkPlan } from "../lib/types";
 import { areaHazards, crewAlerts, type Alert } from "../lib/hazards";
 import { conditions, fmtLmst, useNow } from "../lib/mars";
@@ -24,7 +24,7 @@ const Scene = lazy(() => import("../astro/Scene").then((m) => ({ default: m.Scen
 const LAST_CREW = "mars-ops.helmet.crew";
 /** how much faster than real walking the simulated EVA goes (?speed=1 for real time) */
 const SPEED = Number(new URLSearchParams(location.search).get("speed")) || 30;
-const REPORT_MS = 3000;
+const REPORT_MS = 10_000; // every report reaches every open page through realtime
 
 export function HelmetPicker() {
   const last = load<string | null>(LAST_CREW, null);
@@ -36,8 +36,8 @@ export function HelmetPicker() {
 export function Helmet() {
   const { crewId } = useParams();
   useEffect(() => { if (crewId) save(LAST_CREW, crewId); }, [crewId]);
-  const crews = useCrews(), plans = usePlans(crewId);
-  const crew = crews.data?.find((c) => c.id === crewId);
+  const crewQ = useCrew(crewId), plans = usePlans(crewId);
+  const crew = crewQ.data ?? undefined;
   const zone = useZone(crew?.zone), hm = useHeightmap(zone);
   const home = crew ? crewHome(crew, zone) : null;
   const active = activePlan(plans.data), plan = active?.route ? active : null; // an EVA with a route to follow
@@ -69,7 +69,7 @@ export function Helmet() {
   }
   const onGl = useCallback((gl: THREE.WebGLRenderer) => { glRef.current = gl; }, []);
 
-  if (crews.isSuccess && !crew) return <HelmetPicker />;
+  if (crewQ.isSuccess && !crew) return <HelmetPicker />;
   const route = plan?.route;
   const left = route ? Math.max(0, route.distance_m - progress) : 0;
 

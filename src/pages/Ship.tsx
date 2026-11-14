@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
-import { activePlan, useCrews, useEvents, usePlans, useStartEva, useUpdateEvent, useUpdatePlan } from "../lib/queries";
+import { activePlan, useCrew, useEvents, usePlans, useStartEva, useUpdateEvent, useUpdatePlan } from "../lib/queries";
 import type { Crew, MarsEvent, Route, WorkPlan } from "../lib/types";
 import { crewHome, inZone, useHeightmap, useZone, type Heightmap, type Zone } from "../lib/zones";
 import { generateRoute } from "../lib/routing";
@@ -37,8 +37,8 @@ type Start = { lat: number; lon: number; name: string };
 
 export function Ship() {
   const { crewId } = useParams();
-  const crews = useCrews(), plans = usePlans(crewId);
-  const crew = crews.data?.find((c) => c.id === crewId);
+  const crewQ = useCrew(crewId), plans = usePlans(crewId);
+  const crew = crewQ.data ?? undefined;
   const zone = useZone(crew?.zone), hm = useHeightmap(zone);
   const [selId, setSelId] = useState<string | null>(null);
   const [starts, setStarts] = useState<Record<string, Start>>({});
@@ -59,7 +59,7 @@ export function Ship() {
   const avoid = zone ? avoidList(areaHazards(evs, zone.id, now, now + AVOID_AHEAD_H * 3600_000)) : [];
   const env: Env = { evs, now, avoid };
 
-  if (crews.isSuccess && !crew) return <ShipPicker />;
+  if (crewQ.isSuccess && !crew) return <ShipPicker />;
 
   return (
     <div className="flex h-full">

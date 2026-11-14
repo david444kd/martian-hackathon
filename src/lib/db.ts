@@ -1,6 +1,6 @@
 // Data access: the browser talks straight to Supabase (tables from supabase/schema.sql, open to
 // everyone - no auth for the hackathon). Keys come from .env.local.
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Crew, EventPatch, MarsEvent, NewCrew, NewEvent, NewPlan, PlanPatch, WorkPlan } from "./types";
 
 const URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -13,6 +13,7 @@ export const configError = !URL || !KEY
 
 interface Db {
   listCrews(): Promise<Crew[]>;
+  getCrew(id: string): Promise<Crew | null>;
   createCrew(c: NewCrew): Promise<Crew>;
   deleteCrew(id: string): Promise<void>;
   listPlans(crewId?: string): Promise<WorkPlan[]>;
@@ -28,14 +29,17 @@ interface Db {
 /** events that ended more than this long ago are no longer fetched */
 const EVENT_HISTORY_MS = 6 * 3600_000;
 
-function supabaseDb(url: string, key: string): Db {
-  const sb = createClient(url, key, { auth: { persistSession: false } });
+/** the client itself (null without keys): lib/realtime.ts subscribes to table changes through it */
+export const sb: SupabaseClient | null = configError ? null : createClient(URL!, KEY!, { auth: { persistSession: false } });
+
+function supabaseDb(sb: SupabaseClient): Db {
   const ok = <T,>({ data, error }: { data: T | null; error: { message: string } | null }): T => {
     if (error) throw new Error(error.message);
     return data as T;
   };
   return {
     listCrews: async () => ok(await sb.from("crews").select("*").order("created_at")),
+    getCrew: async (id) => ok(await sb.from("crews").select("*").eq("id", id).maybeSingle()),
     createCrew: async (c) => ok(await sb.from("crews").insert(c).select().single()),
     deleteCrew: async (id) => { ok(await sb.from("crews").delete().eq("id", id)); },
     listPlans: async (crewId) => {
@@ -59,4 +63,4 @@ function supabaseDb(url: string, key: string): Db {
 // without keys every call fails with the explanation (the app also shows it in a banner)
 export const db: Db = configError
   ? new Proxy({} as Db, { get: () => () => Promise.reject(new Error(configError!)) })
-  : supabaseDb(URL!, KEY!);
+  : supabaseDb(sb!);

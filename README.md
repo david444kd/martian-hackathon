@@ -1,7 +1,7 @@
 # Mars Ops — hackathon
 
-Three applications for Mars surface operations on one codebase, linked through Supabase (each page
-polls every 3 s; no backend of our own):
+Three applications for Mars surface operations on one codebase, linked through Supabase (changes
+reach every open page through Supabase Realtime, with slow polling as a fallback; no backend of our own):
 
 | App | URL | What it does |
 |---|---|---|
@@ -24,6 +24,7 @@ public/
 └── textures/         the globe's Mars map (Viking colour, 4096×2048)
 supabase/schema.sql   the tables: crews (landing point), work_plans (route + EVA progress), events
 supabase/events.sql   just the events table, for a database made before it existed
+                      (both end by adding the tables to the supabase_realtime publication)
 scripts/              one-off data builders (already run; their output is committed)
 ```
 

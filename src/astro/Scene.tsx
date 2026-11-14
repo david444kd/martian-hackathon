@@ -1,13 +1,18 @@
 // The helmet's view (three.js via react-three-fiber, WebXR for Meta Quest 2). Nothing to click:
 // you stand on the surface 1:1 at your last checkpoint, facing the next one; the route is a glowing
 // line on the ground with beacons ahead; a relief mini-map floats below your gaze and a status
-// panel just under eye level. Everything follows the active work plan and your progress.
+// panel just under eye level. Everything follows the active work plan and your progress. Anomalies
+// stand on the surface as columns of dust, the top alert floats at eye level, and the sky and haze
+// follow the dust in the air.
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import type { Heightmap } from "../lib/zones";
-import type { Route, WorkPlan } from "../lib/types";
+import type { MarsEvent, Route, WorkPlan } from "../lib/types";
+import { LEVEL_COLOR } from "../components/levels";
+import type { Alert } from "../lib/hazards";
+import { fmtLmst, type Conditions } from "../lib/mars";
 import { labelTexture, localOf, patchGeometry, terrainGeometry } from "./geometry";
 import { useCloseup } from "./closeup";
 import { closeupMaterial, detailTexture } from "./detail";
@@ -15,7 +20,8 @@ import { alongs, checkpointAt, checkpoints, legBearing, pointAt, type Checkpoint
 import { compass, fmtDur, fmtKm } from "../lib/geo";
 
 const ROUTE = new THREE.Color("#ffb347");
-const SKY = "#c9946a";
+const SKY = new THREE.Color("#c9946a");
+const STORM_SKY = new THREE.Color("#6e4a33");
 const MINI_SIZE = 0.42; // m, the mini-map's width
 const LITE = new URLSearchParams(location.search).has("lite");
 
@@ -24,11 +30,17 @@ interface SceneProps {
   home: [number, number];
   plan: WorkPlan | null;   // the active work plan (null: standby)
   progress: number;        // metres walked along its route
+  cond: Conditions | null; // surface conditions now
+  alerts: Alert[];         // most important first
+  hazards: MarsEvent[];    // active anomaly areas in the zone
   onGl: (gl: THREE.WebGLRenderer) => void;
   onXr: (s: XRSession | null) => void;
 }
 
 export function Scene(props: SceneProps) {
+  // dust in the air: the sky darkens and the haze closes in (τ 0.5 clear, 3+ a storm)
+  const dust = Math.min(1, Math.max(0, ((props.cond?.tau ?? 0.5) - 0.6) / 3.5));
+  const sky = useMemo(() => SKY.clone().lerp(STORM_SKY, dust), [dust]);
   return (
     <Canvas
       camera={{ fov: 70, near: 0.02, far: 40000, position: [0, 1.7, 0] }}
@@ -42,14 +54,14 @@ export function Scene(props: SceneProps) {
         gl.xr.setFramebufferScaleFactor(LITE ? 1 : 1.2);
         props.onGl(gl);
       }}>
-      <color attach="background" args={[SKY]} />
-      <fog attach="fog" args={[SKY, 1500, 9000]} />
+      <color attach="background" args={[sky]} />
+      <fog attach="fog" args={[sky, 1500 * (1 - dust * 0.95), 9000 * (1 - dust * 0.88)]} />
       <World {...props} />
     </Canvas>
   );
 }
 
-function World({ hm, home, plan, progress, onXr }: SceneProps) {
+function World({ hm, home, plan, progress, cond, alerts, hazards, onXr }: SceneProps) {
   const route = plan?.route ?? null;
   const cps = useMemo(() => (route ? checkpoints(route) : []), [route]);
   const along = useMemo(() => (route ? alongs(route) : []), [route]);
@@ -78,12 +90,14 @@ function World({ hm, home, plan, progress, onXr }: SceneProps) {
       <Closeup hm={hm} at={here} t={t} />
       {route && <RouteLine hm={hm} route={route} M={M} />}
       {route && <Beacons hm={hm} route={route} cps={cps} M={M} step={step} />}
+      <HazardColumns hm={hm} hazards={hazards} M={M} />
       <FollowGaze distance={0.8} drop={0.33} tilt={0.95}>
-        <MiniMap hm={hm} route={route} you={you} home={home} />
+        <MiniMap hm={hm} route={route} you={you} home={home} hazards={hazards} />
       </FollowGaze>
       {presenting && (
         <FollowGaze distance={1.2} drop={0.17} tilt={0}>
-          <Hud plan={plan} cps={cps} step={step} progress={progress} />
+          <Hud plan={plan} cps={cps} step={step} progress={progress} cond={cond} />
+          {alerts[0] && <AlertPanel alert={alerts[0]} more={alerts.length - 1} />}
         </FollowGaze>
       )}
       {!presenting && <LookAround step={step} />}
@@ -202,6 +216,30 @@ function Beacons({ hm, route, cps, M, step }: { hm: Heightmap; route: Route; cps
   );
 }
 
+/** each anomaly area as a tall translucent column standing on the ground, edged in its alert colour */
+function HazardColumns({ hm, hazards, M }: { hm: Heightmap; hazards: MarsEvent[]; M: THREE.Matrix4 }) {
+  const items = useMemo(() => hazards.map((e) => ({ e, at: localOf(hm, e.lat!, e.lon!).applyMatrix4(M) })), [hm, hazards, M]);
+  return (
+    <>
+      {items.map(({ e, at }) => {
+        const r = e.radius_m!, dust = e.kind !== "rockfall";
+        return (
+          <group key={e.id} position={at}>
+            <mesh position={[0, 250, 0]} renderOrder={5}>
+              <cylinderGeometry args={[r, r * 0.92, 700, 64, 1, true]} />
+              <meshBasicMaterial color={dust ? "#a8714a" : "#d04a3a"} transparent opacity={dust ? 0.3 : 0.18} side={THREE.DoubleSide} depthWrite={false} />
+            </mesh>
+            <mesh position={[0, 4, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={6}>
+              <ringGeometry args={[r - 6, r, 96]} />
+              <meshBasicMaterial color={LEVEL_COLOR[e.level]} transparent opacity={0.8} side={THREE.DoubleSide} depthWrite={false} />
+            </mesh>
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
 /** keeps its children in front of you (turning with your head, not tilting), `drop` m below eye level, top tilted `tilt` rad towards you */
 function FollowGaze({ distance, drop, tilt, children }: { distance: number; drop: number; tilt: number; children: React.ReactNode }) {
   const ref = useRef<THREE.Group>(null);
@@ -232,7 +270,7 @@ function FollowGaze({ distance, drop, tilt, children }: { distance: number; drop
   return <group ref={ref}>{children}</group>;
 }
 
-function MiniMap({ hm, route, you, home }: { hm: Heightmap; route: Route | null; you: [number, number]; home: [number, number] }) {
+function MiniMap({ hm, route, you, home, hazards }: { hm: Heightmap; route: Route | null; you: [number, number]; home: [number, number]; hazards: MarsEvent[] }) {
   const z = hm.zone;
   const s = MINI_SIZE / (z.width * z.dx);
   // local terrain frame → mini-map: centred, scaled, heights exaggerated ×2
@@ -255,6 +293,12 @@ function MiniMap({ hm, route, you, home }: { hm: Heightmap; route: Route | null;
       </mesh>
       <Terrain hm={hm} geo={geo} t={t} />
       {line && <mesh geometry={line}><meshBasicMaterial color={ROUTE} /></mesh>}
+      {hazards.map((e) => (
+        <mesh key={e.id} position={localOf(hm, e.lat!, e.lon!, 40).applyMatrix4(M)} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[e.radius_m! * s, 40]} />
+          <meshBasicMaterial color={LEVEL_COLOR[e.level]} transparent opacity={0.45} depthWrite={false} side={THREE.DoubleSide} />
+        </mesh>
+      ))}
       <mesh position={homeAt.clone().add(new THREE.Vector3(0, 0.006, 0))}>
         <sphereGeometry args={[0.004, 12, 8]} />
         <meshBasicMaterial color="#5ec4d6" />
@@ -290,10 +334,12 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, width: number, maxLin
 }
 
 /** the status panel under eye level, drawn on a canvas texture */
-function Hud({ plan, cps, step, progress }: { plan: WorkPlan | null; cps: Checkpoint[]; step: number; progress: number }) {
+const HUD_H = 460;
+
+function Hud({ plan, cps, step, progress, cond }: { plan: WorkPlan | null; cps: Checkpoint[]; step: number; progress: number; cond: Conditions | null }) {
   const { texture, canvas } = useMemo(() => {
     const canvas = document.createElement("canvas");
-    canvas.width = 1024; canvas.height = 400;
+    canvas.width = 1024; canvas.height = HUD_H;
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     return { texture, canvas };
@@ -304,9 +350,9 @@ function Hud({ plan, cps, step, progress }: { plan: WorkPlan | null; cps: Checkp
 
   useEffect(() => {
     const ctx = canvas.getContext("2d")!;
-    ctx.clearRect(0, 0, 1024, 400);
+    ctx.clearRect(0, 0, 1024, HUD_H);
     ctx.fillStyle = "rgba(8,10,14,0.74)";
-    ctx.beginPath(); ctx.roundRect(4, 4, 1016, 392, 28); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(4, 4, 1016, HUD_H - 8, 28); ctx.fill();
     ctx.strokeStyle = route ? "#ffb347" : "#9aa4b2"; ctx.lineWidth = 4; ctx.stroke();
     ctx.font = "600 30px system-ui, sans-serif"; ctx.fillStyle = "#9aa4b2";
     ctx.fillText(route ? "EVA · ACTIVE WORK PLAN" : "EVA HELMET", 36, 58);
@@ -337,12 +383,53 @@ function Hud({ plan, cps, step, progress }: { plan: WorkPlan | null; cps: Checkp
       ctx.fillStyle = "rgba(255,255,255,0.15)"; ctx.fillRect(36, 340, 952, 14);
       ctx.fillStyle = "#4fd1ff"; ctx.fillRect(36, 340, 952 * Math.min(1, progress / total), 14);
     }
+    if (cond) {
+      ctx.font = "30px system-ui, sans-serif";
+      ctx.fillStyle = cond.doseUSvH > 300 || cond.tau > 3 ? "#ff8a80" : cond.doseUSvH > 80 || cond.tau > 1.5 ? "#fbbf24" : "#9aa4b2";
+      ctx.fillText(`${cond.tempC} °C · wind ${cond.windMs} m/s · dust τ ${cond.tau.toFixed(1)} · ${cond.doseUSvH} µSv/h · LMST ${fmtLmst(cond.time.lmst)}`, 36, 412);
+    }
     texture.needsUpdate = true;
-  }, [canvas, texture, plan, route, cps, step, tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canvas, texture, plan, route, cps, step, tick, cond?.tempC, cond?.windMs, cond?.tau, cond?.doseUSvH, Math.floor((cond?.time.lmst ?? 0) * 60)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <mesh renderOrder={30}>
-      <planeGeometry args={[0.56, 0.22]} />
+      <planeGeometry args={[0.56, 0.56 * HUD_H / 1024]} />
+      <meshBasicMaterial map={texture} transparent depthTest={false} />
+    </mesh>
+  );
+}
+
+/** the most important alert, at eye level just above the status panel */
+function AlertPanel({ alert, more }: { alert: Alert; more: number }) {
+  const { texture, canvas } = useMemo(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024; canvas.height = 200;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return { texture, canvas };
+  }, []);
+  useEffect(() => () => texture.dispose(), [texture]);
+  useEffect(() => {
+    const ctx = canvas.getContext("2d")!, color = LEVEL_COLOR[alert.level];
+    ctx.clearRect(0, 0, 1024, 200);
+    ctx.fillStyle = alert.level === "critical" ? "rgba(70,8,8,0.88)" : "rgba(8,10,14,0.85)";
+    ctx.beginPath(); ctx.roundRect(4, 4, 1016, 192, 24); ctx.fill();
+    ctx.strokeStyle = color; ctx.lineWidth = 6; ctx.stroke();
+    ctx.fillStyle = color; ctx.font = "bold 46px system-ui, sans-serif";
+    ctx.fillText(`${alert.level === "info" ? "ℹ" : "⚠"} ${alert.title}`.slice(0, 44), 32, 70);
+    ctx.fillStyle = "#f2f2f2"; ctx.font = "32px system-ui, sans-serif";
+    wrap(ctx, alert.text, 960, 2).forEach((l, i) => ctx.fillText(l, 32, 122 + i * 40));
+    if (more > 0) { ctx.fillStyle = "#9aa4b2"; ctx.font = "26px system-ui, sans-serif"; ctx.fillText(`+${more} more`, 880, 70); }
+    texture.needsUpdate = true;
+  }, [canvas, texture, alert.id, alert.level, alert.title, alert.text, more]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pulse = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    const m = pulse.current?.material as THREE.MeshBasicMaterial | undefined;
+    if (m) m.opacity = alert.level === "critical" ? 0.75 + 0.25 * Math.sin(clock.elapsedTime * 5) : 1;
+  });
+  return (
+    <mesh ref={pulse} position={[0, 0.2, 0]} renderOrder={31}>
+      <planeGeometry args={[0.56, 0.11]} />
       <meshBasicMaterial map={texture} transparent depthTest={false} />
     </mesh>
   );

@@ -1,13 +1,19 @@
-// Mission control's Mars globe: drag to turn, scroll to zoom; every crew on the surface is a dot.
+// Mission control's Mars globe: drag to turn, scroll to zoom; every crew on the surface is a dot,
+// every anomaly a pulsing patch; a solar particle event turns the whole atmosphere violet.
 import { useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, OrbitControls, Stars, useTexture } from "@react-three/drei";
 import * as THREE from "three";
+import type { Level } from "../lib/types";
+import { LEVEL_COLOR } from "../components/levels";
 
-interface GlobeCrew { id: string; name: string; lat: number; lon: number; active: boolean }
+interface GlobeCrew { id: string; name: string; lat: number; lon: number; active: boolean; alert: Level | null }
+interface GlobeHazard { id: string; lat: number; lon: number; level: Level; label: string; active: boolean }
 
 interface Props {
   crews: GlobeCrew[];
+  hazards: GlobeHazard[];
+  solar: Level | null;
   selected: string | null;
   onSelect: (id: string) => void;
 }
@@ -26,7 +32,8 @@ export function Globe(props: Props) {
       <ambientLight intensity={1.15} />
       <directionalLight position={[-4, 2, 5]} intensity={1.6} />
       <Planet />
-      <Atmosphere />
+      <Atmosphere color={props.solar ? "#b76bff" : "#e8925a"} strength={props.solar === "critical" ? 1.1 : props.solar ? 0.8 : 0.55} />
+      {props.hazards.map((h, i) => <HazardMark key={h.id} h={h} label={labelOf(props.hazards, i)} />)}
       <Markers {...props} />
       <CameraRig {...props} />
     </Canvas>
@@ -47,22 +54,71 @@ function Planet() {
 }
 
 // a thin dusty-orange rim, brightest at the edge of the disc
-function Atmosphere() {
+function Atmosphere({ color, strength }: { color: string; strength: number }) {
   const mat = useMemo(() => new THREE.ShaderMaterial({
     transparent: true,
     blending: THREE.AdditiveBlending,
     side: THREE.BackSide,
     depthWrite: false,
-    uniforms: { color: { value: new THREE.Color("#e8925a") } },
+    uniforms: { color: { value: new THREE.Color() }, strength: { value: 0.55 } },
     vertexShader: `varying vec3 vN; varying vec3 vV;
       void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
     fragmentShader: `uniform vec3 color; varying vec3 vN; varying vec3 vV;
-      void main() { float f = pow(1.0 - abs(dot(vN, vV)), 5.0); gl_FragColor = vec4(color, f * 0.55); }`,
+uniform float strength;
+      void main() { float f = pow(1.0 - abs(dot(vN, vV)), 5.0); gl_FragColor = vec4(color, f * strength); }`,
   }), []);
+  useEffect(() => () => mat.dispose(), [mat]);
+  useEffect(() => { mat.uniforms.color.value.set(color); mat.uniforms.strength.value = strength; }, [mat, color, strength]);
   return (
     <mesh material={mat} scale={1.03}>
       <sphereGeometry args={[1, 64, 32]} />
     </mesh>
+  );
+}
+
+/** anomalies in one zone sit on top of each other at this scale: the first one there gets one label for all */
+function labelOf(all: GlobeHazard[], i: number) {
+  const near = (a: GlobeHazard, b: GlobeHazard) => Math.abs(a.lat - b.lat) < 1 && Math.abs(a.lon - b.lon) < 1;
+  if (all.slice(0, i).some((o) => near(o, all[i]))) return null;
+  const n = all.filter((o) => near(o, all[i])).length;
+  return n > 1 ? `${all[i].label} +${n - 1}` : all[i].label;
+}
+
+/** an anomaly: a translucent patch with a pulse (faint while only forecast) and its name */
+function HazardMark({ h, label: text }: { h: GlobeHazard; label: string | null }) {
+  const pos = useMemo(() => onSphere(h.lat, h.lon, 1.003), [h.lat, h.lon]);
+  const quat = useMemo(() => new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), pos.clone().normalize()), [pos]);
+  const ring = useRef<THREE.Mesh>(null), label = useRef<HTMLDivElement>(null);
+  const tmp = useMemo(() => new THREE.Vector3(), []);
+  const color = LEVEL_COLOR[h.level];
+  useFrame(({ clock, camera }) => {
+    if (ring.current) {
+      const t = (clock.elapsedTime * 0.6) % 1;
+      ring.current.scale.setScalar(1 + t * 1.6);
+      (ring.current.material as THREE.MeshBasicMaterial).opacity = (1 - t) * (h.active ? 0.9 : 0.35);
+    }
+    if (label.current) { tmp.copy(camera.position).sub(pos); label.current.style.opacity = tmp.dot(pos) > 0 ? "1" : "0"; }
+  });
+  return (
+    <group position={pos} quaternion={quat}>
+      <mesh>
+        <circleGeometry args={[0.032, 40]} />
+        <meshBasicMaterial color={color} transparent opacity={h.active ? 0.35 : 0.12} depthWrite={false} />
+      </mesh>
+      <mesh ref={ring} position={[0, 0, 0.0005]}>
+        <ringGeometry args={[0.03, 0.034, 48]} />
+        <meshBasicMaterial color={color} transparent depthWrite={false} />
+      </mesh>
+      {text && (
+        <Html position={[0, 0, 0.01]} center zIndexRange={[9, 0]} style={{ pointerEvents: "none" }}>
+          <div ref={label} className="translate-y-[22px] transition-opacity duration-200">
+            <div className="rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap" style={{ color, border: `1px solid ${color}88` }}>
+              {h.active ? "⚠" : "◷"} {text}
+            </div>
+          </div>
+        </Html>
+      )}
+    </group>
   );
 }
 
@@ -74,12 +130,12 @@ function Marker({ crew, selected, onSelect }: { crew: GlobeCrew; selected: boole
   const pos = useMemo(() => onSphere(crew.lat, crew.lon, 1.004), [crew.lat, crew.lon]);
   const quat = useMemo(() => new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), pos.clone().normalize()), [pos]);
   const ring = useRef<THREE.Mesh>(null), label = useRef<HTMLDivElement>(null);
-  const color = crew.active ? "#4fd1ff" : "#ffb347";
+  const color = crew.alert ? LEVEL_COLOR[crew.alert] : crew.active ? "#4fd1ff" : "#ffb347";
   const tmp = useMemo(() => new THREE.Vector3(), []);
 
   useFrame(({ clock, camera }) => {
     if (ring.current) {
-      const t = (clock.elapsedTime * (crew.active ? 0.9 : 0.5)) % 1;
+      const t = (clock.elapsedTime * (crew.alert ? 1.4 : crew.active ? 0.9 : 0.5)) % 1;
       ring.current.scale.setScalar(1 + t * 2.4);
       (ring.current.material as THREE.MeshBasicMaterial).opacity = (1 - t) * 0.8;
     }

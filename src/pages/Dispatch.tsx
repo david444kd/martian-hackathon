@@ -1,10 +1,11 @@
-// MISSION CONTROL: the Mars globe with every crew on the surface; pick a crew to see and manage its
-// work plans in the side panel; "New crew" registers one.
+// MISSION CONTROL: the Mars globe with every crew on the surface and every anomaly; pick a crew to
+// see its alerts, surface conditions and work plans in the side panel; "New crew" registers one,
+// "New event" raises an anomaly, a forecast or a message that the ships and helmets see at once.
 import { lazy, Suspense, useMemo, useState } from "react";
 import { Marker, Polyline } from "react-leaflet";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { Activity, ExternalLink, Globe2, MapPin, Pencil, Plus, Ship, Trash2, Users, X } from "lucide-react";
+import { Activity, ExternalLink, Globe2, MapPin, Megaphone, Pencil, Plus, Radiation, Ship, Trash2, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -15,8 +16,8 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
-import { activePlan, useCrews, useDeleteCrew, useDeletePlan, usePlans } from "../lib/queries";
-import type { Crew, WorkPlan } from "../lib/types";
+import { activePlan, useCrews, useDeleteCrew, useDeletePlan, useEvents, usePlans } from "../lib/queries";
+import { EVENT_KINDS, LEVEL_RANK, type Crew, type Level, type MarsEvent, type WorkPlan } from "../lib/types";
 import { crewHome, useHeightmap, useZone, useZones } from "../lib/zones";
 import { fmtDate, fmtKm, fmtLL } from "../lib/geo";
 import { Brand, ErrorNote, EvaCard, RouteStats, StatusBadge } from "../components/common";
@@ -24,6 +25,12 @@ import { ZoneLeafletMap } from "../components/ZoneLeafletMap";
 import { DOT, LIVE_PIN, pin } from "../components/mapPins";
 import { NewCrewDialog, PlanDialog } from "../dispatch/dialogs";
 import { astronautAt } from "../astro/checkpoints";
+import { AlertList, ConditionsGrid, HazardAreas, OutlookBar } from "../components/alerts";
+import { LEVEL_COLOR } from "../components/levels";
+import { EventDialog } from "../components/EventDialog";
+import { EventsPanel } from "../dispatch/EventsPanel";
+import { crewAlerts, hasArea, outlook } from "../lib/hazards";
+import { conditions, eventLabel, isActive, useNow } from "../lib/mars";
 
 const Globe = lazy(() => import("../dispatch/Globe").then((m) => ({ default: m.Globe })));
 
@@ -33,20 +40,30 @@ export function Dispatch() {
   const selectedId = params.get("crew");
   const select = (id: string | null) => setParams(id ? { crew: id } : {});
   const [adding, setAdding] = useState(false);
+  const [raising, setRaising] = useState(false);
+  const events = useEvents(), now = useNow();
+  const evs = useMemo(() => events.data ?? [], [events.data]);
 
   const dots = useMemo(() => (crews.data ?? []).flatMap((c) => {
-    const home = crewHome(c, zones.data?.find((z) => z.id === c.zone));
+    const zone = zones.data?.find((z) => z.id === c.zone), home = crewHome(c, zone);
     if (!home) return [];
-    return [{ id: c.id, name: c.name, lat: home[0], lon: home[1], active: !!activePlan(plans.data?.filter((p) => p.crew_id === c.id)) }];
-  }), [crews.data, plans.data, zones.data]);
+    const active = activePlan(plans.data?.filter((p) => p.crew_id === c.id));
+    const top = crewAlerts(c, zone, active, evs, now, astronautAt(active))[0];
+    const alert: Level | null = top && top.level !== "info" ? top.level : null;
+    return [{ id: c.id, name: c.name, lat: home[0], lon: home[1], active: !!active, alert }];
+  }), [crews.data, plans.data, zones.data, evs, now]);
+  const hazards = useMemo(() => evs.filter((e) => hasArea(e) && (isActive(e, now) || Date.parse(e.starts_at) - now < 12 * 3600_000) && (!e.ends_at || Date.parse(e.ends_at) > now))
+    .map((e) => ({ id: e.id, lat: e.lat!, lon: e.lon!, level: e.level, label: eventLabel(e), active: isActive(e, now) })), [evs, now]);
+  const solar = evs.filter((e) => e.kind === "solar_storm" && isActive(e, now)).sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level])[0];
   const selected = crews.data?.find((c) => c.id === selectedId);
   const activeCount = dots.filter((d) => d.active).length;
+  const liveEvents = evs.filter((e) => isActive(e, now) || Date.parse(e.starts_at) > now).length;
 
   return (
     <div className="relative h-full overflow-hidden bg-[#07060a]">
       <div className="absolute inset-0">
         <Suspense fallback={<div className="grid h-full place-items-center text-sm text-muted-foreground">Loading globe…</div>}>
-          <Globe crews={dots} selected={selectedId} onSelect={select} />
+          <Globe crews={dots} hazards={hazards} solar={solar?.level ?? null} selected={selectedId} onSelect={select} />
         </Suspense>
       </div>
 
@@ -55,16 +72,25 @@ export function Dispatch() {
         <div className="pointer-events-auto flex items-center gap-2">
           <Badge variant="outline" className="hidden h-8 gap-1.5 bg-background/60 px-3 backdrop-blur sm:flex"><Users /> {dots.length} crews</Badge>
           <Badge variant="outline" className="hidden h-8 gap-1.5 bg-background/60 px-3 text-live backdrop-blur sm:flex"><Activity /> {activeCount} EVA active</Badge>
+          {solar && <Badge variant="outline" className="h-8 animate-pulse gap-1.5 border-red-500/60 bg-red-500/20 px-3 text-red-200 backdrop-blur"><Radiation /> {EVENT_KINDS.solar_storm.label}</Badge>}
+          <Button size="lg" variant="outline" className="bg-background/60 backdrop-blur" onClick={() => setRaising(true)}><Megaphone /> New event</Button>
           <Button size="lg" onClick={() => setAdding(true)}><Plus /> New crew</Button>
         </div>
       </header>
 
-      {(crews.error || plans.error) && (
-        <div className="absolute top-20 left-1/2 w-[min(520px,90%)] -translate-x-1/2"><ErrorNote error={crews.error ?? plans.error} /></div>
+      {(crews.error || plans.error || events.error) && (
+        <div className="absolute top-20 left-1/2 w-[min(520px,90%)] -translate-x-1/2"><ErrorNote error={crews.error ?? plans.error ?? events.error} /></div>
       )}
 
+      <div className="absolute top-20 right-4 hidden max-h-[calc(100%-8rem)] w-80 flex-col overflow-hidden rounded-xl border bg-card/80 backdrop-blur-md lg:flex">
+        <div className="flex items-center justify-between px-3 pt-2.5 pb-2 text-xs font-medium tracking-wider text-muted-foreground uppercase">
+          <span>Space weather & alerts · {liveEvents}</span>
+        </div>
+        <EventsPanel events={evs} crews={crews.data ?? []} now={now} className="overflow-y-auto px-2 pb-2" />
+      </div>
+
       {selected
-        ? <CrewPanel key={selected.id} crew={selected} plans={plans.data?.filter((p) => p.crew_id === selected.id) ?? []} onClose={() => select(null)} />
+        ? <CrewPanel key={selected.id} crew={selected} plans={plans.data?.filter((p) => p.crew_id === selected.id) ?? []} evs={evs} now={now} onClose={() => select(null)} />
         : (
           <div className="absolute bottom-4 left-4 w-72 max-w-[calc(100%-2rem)] rounded-xl border bg-card/80 p-2 backdrop-blur-md">
             <div className="px-2 py-1.5 text-xs font-medium tracking-wider text-muted-foreground uppercase">Crews on Mars</div>
@@ -74,6 +100,7 @@ export function Dispatch() {
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted">
                 <span className={cn("size-2 rounded-full", d.active ? "animate-pulse bg-live" : "bg-route")} />
                 <span className="font-medium">{d.name}</span>
+                {d.alert && <span className="size-2 animate-pulse rounded-full" style={{ background: LEVEL_COLOR[d.alert] }} title="Has alerts" />}
                 <span className="ml-auto text-xs text-muted-foreground">{crews.data?.find((c) => c.id === d.id)?.zone}</span>
               </button>
             ))}
@@ -82,13 +109,17 @@ export function Dispatch() {
 
       <div className="pointer-events-none absolute right-4 bottom-4 hidden text-xs text-white/50 sm:block">Drag to turn · scroll to zoom · click a crew</div>
       <NewCrewDialog open={adding} onOpenChange={setAdding} onCreated={(c) => select(c.id)} />
+      {raising && <EventDialog open onOpenChange={setRaising} crews={crews.data ?? []} source="dispatch" />}
     </div>
   );
 }
 
-function CrewPanel({ crew, plans, onClose }: { crew: Crew; plans: WorkPlan[]; onClose: () => void }) {
+function CrewPanel({ crew, plans, evs, now, onClose }: { crew: Crew; plans: WorkPlan[]; evs: MarsEvent[]; now: number; onClose: () => void }) {
   const zone = useZone(crew.zone), home = crewHome(crew, zone);
   const active = activePlan(plans);
+  const alerts = crewAlerts(crew, zone, active, evs, now, astronautAt(active));
+  const cond = zone ? conditions(zone, now, evs) : null;
+  const look = useMemo(() => (zone ? outlook(zone, active?.route ?? null, evs, now) : null), [zone, active?.route, evs, now]);
   const [editing, setEditing] = useState<WorkPlan | "new" | null>(null);
   const [open, setOpen] = useState<string | null>(active?.id ?? null);
   const del = useDeleteCrew();
@@ -108,11 +139,16 @@ function CrewPanel({ crew, plans, onClose }: { crew: Crew; plans: WorkPlan[]; on
 
       {active?.route && <EvaCard plan={active} className="mx-4 mb-2" />}
 
-      <div className="flex items-center justify-between px-4 pt-2 pb-2">
-        <div className="text-xs font-medium tracking-wider text-muted-foreground uppercase">Work plans · {plans.length}</div>
-        <Button size="sm" onClick={() => setEditing("new")}><Plus /> Add plan</Button>
-      </div>
       <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-3 px-4 pb-3">
+          <AlertList alerts={alerts} />
+          {cond && zone && <ConditionsGrid c={cond} zone={zone} />}
+          {look && zone && <OutlookBar zone={zone} slots={look.slots} />}
+        </div>
+        <div className="flex items-center justify-between px-4 pt-1 pb-2">
+          <div className="text-xs font-medium tracking-wider text-muted-foreground uppercase">Work plans · {plans.length}</div>
+          <Button size="sm" onClick={() => setEditing("new")}><Plus /> Add plan</Button>
+        </div>
         <div className="flex flex-col gap-2 px-4 pb-4">
           {plans.length === 0 && (
             <Empty className="border border-dashed p-6">
@@ -123,7 +159,7 @@ function CrewPanel({ crew, plans, onClose }: { crew: Crew; plans: WorkPlan[]; on
             </Empty>
           )}
           {plans.map((p) => (
-            <PlanItem key={p.id} plan={p} open={open === p.id} onToggle={() => setOpen(open === p.id ? null : p.id)} onEdit={() => setEditing(p)} />
+            <PlanItem key={p.id} plan={p} evs={evs} now={now} open={open === p.id} onToggle={() => setOpen(open === p.id ? null : p.id)} onEdit={() => setEditing(p)} />
           ))}
         </div>
       </ScrollArea>
@@ -154,7 +190,7 @@ function CrewPanel({ crew, plans, onClose }: { crew: Crew; plans: WorkPlan[]; on
   );
 }
 
-function PlanItem({ plan, open, onToggle, onEdit }: { plan: WorkPlan; open: boolean; onToggle: () => void; onEdit: () => void }) {
+function PlanItem({ plan, evs, now, open, onToggle, onEdit }: { plan: WorkPlan; evs: MarsEvent[]; now: number; open: boolean; onToggle: () => void; onEdit: () => void }) {
   const del = useDeletePlan();
   return (
     <div className={cn("rounded-xl border bg-background/40 transition-colors", open && "border-primary/40 bg-background/70")}>
@@ -184,12 +220,12 @@ function PlanItem({ plan, open, onToggle, onEdit }: { plan: WorkPlan; open: bool
           </AlertDialogContent>
         </AlertDialog>
       </div>
-      {open && <PlanDetails plan={plan} />}
+      {open && <PlanDetails plan={plan} evs={evs} now={now} />}
     </div>
   );
 }
 
-function PlanDetails({ plan }: { plan: WorkPlan }) {
+function PlanDetails({ plan, evs, now }: { plan: WorkPlan; evs: MarsEvent[]; now: number }) {
   const zone = useZone(plan.zone), hm = useHeightmap(zone);
   const you = astronautAt(plan);
   return (
@@ -197,6 +233,7 @@ function PlanDetails({ plan }: { plan: WorkPlan }) {
       {plan.description && <p className="text-sm whitespace-pre-line text-muted-foreground">{plan.description}</p>}
       {zone && (
         <ZoneLeafletMap zone={zone} hm={hm.data} className="aspect-square rounded-xl border">
+          <HazardAreas events={evs} zoneId={zone.id} now={now} />
           {plan.route && <Polyline positions={plan.route.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={{ color: "#ffb347", weight: 3 }} />}
           {plan.route && <Marker position={[plan.route.start.lat, plan.route.start.lon]} icon={pin(`${DOT} bg-landing`, "", 12)} />}
           <Marker position={[plan.target_lat, plan.target_lon]} icon={pin(`${DOT} bg-target`, "", 16)} />

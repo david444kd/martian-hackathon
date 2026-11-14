@@ -39,7 +39,7 @@ export function ZoneLeafletMap({ zone, hm, onPick, children, className }: Props)
   const close = CLOSE_UP[zone.id];
 
   return (
-    <div className={cn("relative overflow-hidden bg-[#0d0907] [&_.leaflet-container]:bg-[#7b7671]", onPick && "[&_.leaflet-container]:cursor-crosshair", className)}>
+    <div className={cn("relative isolate overflow-hidden bg-[#0d0907] [&_.leaflet-container]:bg-[#7b7671]", onPick && "[&_.leaflet-container]:cursor-crosshair", className)}>
       <MapContainer key={zone.id} crs={L.CRS.EPSG4326} center={bounds.getCenter()} zoom={12} maxZoom={18}
         maxBounds={bounds} maxBoundsViscosity={1} zoomSnap={0.25} zoomDelta={0.5} zoomControl={false} className="size-full">
         <Cover bounds={bounds} />

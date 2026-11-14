@@ -1,25 +1,33 @@
 // SHIP CONSOLE: the crew's zone on a full-screen map, its work plans in a fixed sidebar. The crew
-// makes a safe walking route for a plan, sends it to the helmet and starts / ends the EVA.
-import { useState } from "react";
+// makes a safe walking route for a plan (around slopes and anomalies), checks the safety window,
+// sends it to the helmet and starts / ends the EVA; alerts and surface conditions sit on top.
+import { useMemo, useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
 import { Marker, Polyline, Tooltip, ZoomControl } from "react-leaflet";
 import { ZoneLeafletMap } from "../components/ZoneLeafletMap";
 import { DOT, LIVE_PIN, pin } from "../components/mapPins";
-import { CheckCircle2, Crosshair, Flag, Loader2, Play, Route as RouteIcon, Send, Ship as ShipIcon, Square, X } from "lucide-react";
+import { CheckCircle2, Crosshair, Flag, Loader2, Megaphone, Play, Route as RouteIcon, Send, Ship as ShipIcon, Square, Waypoints, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
-import { activePlan, useCrews, usePlans, useStartEva, useUpdatePlan } from "../lib/queries";
-import type { Crew, Route, WorkPlan } from "../lib/types";
+import { activePlan, useCrews, useEvents, usePlans, useStartEva, useUpdateEvent, useUpdatePlan } from "../lib/queries";
+import type { Crew, MarsEvent, Route, WorkPlan } from "../lib/types";
 import { crewHome, inZone, useHeightmap, useZone, type Heightmap, type Zone } from "../lib/zones";
 import { generateRoute } from "../lib/routing";
 import type { PathResult } from "../lib/pathfind";
 import { fmtDate, fmtKm, fmtLL } from "../lib/geo";
-import { astronautAt } from "../astro/checkpoints";
+import { alongs, astronautAt } from "../astro/checkpoints";
 import { Brand, CrewPicker, ErrorNote, EvaCard, RouteStats, StatusBadge } from "../components/common";
+import { AlertList, ConditionsGrid, EvaCheckView, HazardAreas, OutlookBar } from "../components/alerts";
+import { EventDialog } from "../components/EventDialog";
+import { areaHazards, avoidList, crewAlerts, evaCheck, outlook, routeHit, type Avoid } from "../lib/hazards";
+import { conditions, eventLabel, useNow } from "../lib/mars";
+
+/** anomalies that matter for a route made now: active or starting within this many hours */
+const AVOID_AHEAD_H = 6;
 
 export function ShipPicker() {
   return <CrewPicker base="/ship" product="Ship Console" icon={<ShipIcon />} question="Which crew is this ship?" />;
@@ -41,6 +49,16 @@ export function Ship() {
   const startOf = (p: WorkPlan): Start | null =>
     starts[p.id] ?? p.route?.start ?? (home ? { lat: home[0], lon: home[1], name: "Landing site" } : null);
 
+  const events = useEvents(), now = useNow();
+  const evs = useMemo(() => events.data ?? [], [events.data]);
+  const ack = useUpdateEvent();
+  const [raising, setRaising] = useState(false);
+  const live = astronautAt(active);
+  const alerts = crew ? crewAlerts(crew, zone, active, evs, now, live) : [];
+  const cond = zone ? conditions(zone, now, evs) : null;
+  const avoid = zone ? avoidList(areaHazards(evs, zone.id, now, now + AVOID_AHEAD_H * 3600_000)) : [];
+  const env: Env = { evs, now, avoid };
+
   if (crews.isSuccess && !crew) return <ShipPicker />;
 
   return (
@@ -53,11 +71,17 @@ export function Ship() {
             <span className="shrink-0 text-xs text-muted-foreground">{crew?.name} · {zone?.name}</span>
           </div>
         </div>
-        {active?.route && <ActiveEva plan={active} />}
-        <Separator />
-        <div className="px-4 pt-3 pb-2 text-xs font-medium tracking-wider text-muted-foreground uppercase">Work plans from mission control</div>
-        <ErrorNote error={plans.error} />
         <ScrollArea className="min-h-0 flex-1">
+          <div className="flex flex-col gap-3 px-3 pb-3">
+            <AlertList alerts={alerts} onAck={(a) => ack.mutate({ id: a.id, patch: { acked_at: new Date().toISOString() } }, { onSuccess: () => toast("Confirmed to mission control") })} />
+            {cond && zone && <ConditionsGrid c={cond} zone={zone} />}
+            <Button size="sm" variant="outline" disabled={!crew} onClick={() => setRaising(true)}><Megaphone /> Alert the helmet / mark a hazard</Button>
+            <ErrorNote error={events.error} />
+          </div>
+          {active?.route && <ActiveEva plan={active} hm={hm.data} env={env} />}
+          <Separator />
+          <div className="px-4 pt-3 pb-2 text-xs font-medium tracking-wider text-muted-foreground uppercase">Work plans from mission control</div>
+          <ErrorNote error={plans.error} />
           <div className="flex flex-col gap-2 px-3 pb-4">
             {plans.data?.length === 0 && (
               <Empty className="border border-dashed p-6">
@@ -68,7 +92,7 @@ export function Ship() {
               </Empty>
             )}
             {plans.data?.map((p, i) => (
-              <PlanCard key={p.id} n={i + 1} plan={p} selected={p.id === selId} hm={hm.data} start={startOf(p)}
+              <PlanCard key={p.id} n={i + 1} plan={p} selected={p.id === selId} hm={hm.data} zone={zone} env={env} start={startOf(p)}
                 draft={drafts[p.id] ?? null}
                 onSelect={() => setSelId(p.id === selId ? null : p.id)}
                 onDraft={(d) => setDrafts((all) => { const next = { ...all }; if (d) next[p.id] = d; else delete next[p.id]; return next; })} />
@@ -79,9 +103,9 @@ export function Ship() {
         <a href={`/helmet/${crewId}`} target="_blank" rel="noreferrer" className="p-3 text-center text-xs text-muted-foreground hover:text-foreground">Open the helmet view ↗</a>
       </aside>
 
-      <main className="relative min-w-0 flex-1 max-md:hidden">
+      <main className="relative isolate min-w-0 flex-1 max-md:hidden">
         {zone && hm.data && crew ? (
-          <ShipMap zone={zone} hm={hm.data} crew={crew} home={home} plans={plans.data ?? []} sel={sel} active={active}
+          <ShipMap zone={zone} hm={hm.data} crew={crew} home={home} plans={plans.data ?? []} sel={sel} active={active} env={env}
             start={sel ? startOf(sel) : null} draft={sel ? drafts[sel.id] ?? null : null}
             onPick={(lat, lon) => {
               if (!sel || !inZone(zone, lat, lon)) return;
@@ -91,15 +115,52 @@ export function Ship() {
             onSelect={setSelId} />
         ) : <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading map…</div>}
       </main>
+      {crew && raising && <EventDialog open onOpenChange={setRaising} crews={[crew]} crew={crew} source="ship" />}
     </div>
   );
 }
 
-function ActiveEva({ plan }: { plan: WorkPlan }) {
+/** the events as of now, and the areas a route made now has to avoid */
+type Env = { evs: MarsEvent[]; now: number; avoid: Avoid[] };
+
+/** anomalies lying across the rest of an active EVA's route */
+function onRoute(plan: WorkPlan, zoneId: string, env: Env) {
+  if (!plan.route) return [];
+  const along = alongs(plan.route);
+  return areaHazards(env.evs, zoneId, env.now).filter((e) => e.level !== "info" && routeHit(plan.route!, along, e, plan.progress_m ?? 0) != null);
+}
+
+function ActiveEva({ plan, hm, env }: { plan: WorkPlan; hm: Heightmap | undefined; env: Env }) {
   const update = useUpdatePlan();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
   const set = (status: "done" | "assigned", msg: string) => update.mutate({ id: plan.id, patch: { status } }, { onSuccess: () => toast.success(msg) });
+  const blocking = onRoute(plan, plan.zone, env);
+
+  /** a new route from where the astronaut is now, around the anomalies; the helmet switches to it */
+  async function reroute() {
+    const here = astronautAt(plan);
+    if (!hm || !here) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await generateRoute(hm, here, [plan.target_lat, plan.target_lon], env.avoid);
+      const route: Route = { ...r, start: { lat: here[0], lon: here[1], name: "Rerouted here" }, target: { lat: plan.target_lat, lon: plan.target_lon }, generated_at: new Date().toISOString() };
+      await update.mutateAsync({ id: plan.id, patch: { route, progress_m: 0 } });
+      toast.success("New route sent to the helmet");
+    } catch (e) { setErr(e); } finally { setBusy(false); }
+  }
+
   return (
     <EvaCard plan={plan} className="mx-3 mb-3">
+      {blocking.length > 0 && (
+        <div className="mt-3 rounded-lg border border-red-500/50 bg-red-500/15 p-2 text-xs text-red-200">
+          <b>{blocking.map(eventLabel).join(", ")}</b> across the route ahead.
+          <Button size="sm" variant="destructive" className="mt-2 w-full" disabled={busy || !hm} onClick={reroute}>
+            {busy ? <Loader2 className="animate-spin" /> : <Waypoints />} Reroute around it
+          </Button>
+        </div>
+      )}
+      <ErrorNote error={err} />
       <div className="mt-3 flex gap-2">
         <Button size="sm" className="flex-1" disabled={update.isPending} onClick={() => set("done", "EVA complete")}><CheckCircle2 /> Complete</Button>
         <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => set("assigned", "EVA stopped")}><Square /> Stop</Button>
@@ -108,8 +169,8 @@ function ActiveEva({ plan }: { plan: WorkPlan }) {
   );
 }
 
-function PlanCard({ n, plan, selected, hm, start, draft, onSelect, onDraft }: {
-  n: number; plan: WorkPlan; selected: boolean; hm: Heightmap | undefined; start: Start | null;
+function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, onDraft }: {
+  n: number; plan: WorkPlan; selected: boolean; hm: Heightmap | undefined; zone: Zone | undefined; env: Env; start: Start | null;
   draft: PathResult | null; onSelect: () => void; onDraft: (d: PathResult | null) => void;
 }) {
   const update = useUpdatePlan(), startEva = useStartEva();
@@ -117,11 +178,16 @@ function PlanCard({ n, plan, selected, hm, start, draft, onSelect, onDraft }: {
   const [err, setErr] = useState<unknown>(null);
   const saved = plan.route;
   const stale = !!saved && (saved.target.lat !== plan.target_lat || saved.target.lon !== plan.target_lon);
+  const pending = selected && !!saved && !stale && plan.status !== "in_progress" && plan.status !== "done";
+  const { evs, now } = env;
+  const check = useMemo(() => (pending && zone && saved ? evaCheck(zone, saved, evs, now) : null), [pending, zone, saved, evs, now]);
+  const look = useMemo(() => (pending && zone && saved ? outlook(zone, saved, evs, now) : null), [pending, zone, saved, evs, now]);
+  const crossed = selected && zone && saved && !stale ? onRoute({ ...plan, progress_m: 0, status: "in_progress" }, zone.id, env) : [];
 
   async function make() {
     if (!hm || !start) return;
     setBusy(true); setErr(null);
-    try { onDraft(await generateRoute(hm, [start.lat, start.lon], [plan.target_lat, plan.target_lon])); }
+    try { onDraft(await generateRoute(hm, [start.lat, start.lon], [plan.target_lat, plan.target_lon], env.avoid)); }
     catch (e) { setErr(e); }
     finally { setBusy(false); }
   }
@@ -153,6 +219,7 @@ function PlanCard({ n, plan, selected, hm, start, draft, onSelect, onDraft }: {
             <div className="flex items-center gap-1.5"><Crosshair className="size-3.5 text-landing" /> Start: <b>{start?.name}</b> <span className="text-muted-foreground">{start && fmtLL(start.lat, start.lon)}</span></div>
             <div className="flex items-center gap-1.5"><Flag className="size-3.5 text-target" /> Target: <span className="text-muted-foreground">{fmtLL(plan.target_lat, plan.target_lon)}</span></div>
             <div className="text-muted-foreground">Click the map to start the walk somewhere else.</div>
+            {env.avoid.length > 0 && <div className="text-amber-300">The route goes around {env.avoid.length} anomal{env.avoid.length === 1 ? "y" : "ies"} (now or within {AVOID_AHEAD_H} h).</div>}
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -174,14 +241,17 @@ function PlanCard({ n, plan, selected, hm, start, draft, onSelect, onDraft }: {
             <div className="flex flex-col gap-2">
               <div className="text-xs font-medium text-muted-foreground">In the helmet since {fmtDate(saved.generated_at)}</div>
               {stale && <div className="rounded-lg bg-primary/10 px-2.5 py-1.5 text-xs text-primary">Mission control moved the target: make a new route.</div>}
+              {crossed.length > 0 && <div className="rounded-lg bg-red-500/15 px-2.5 py-1.5 text-xs text-red-200">{crossed.map(eventLabel).join(", ")} now across this route: make a new route.</div>}
               <RouteStats route={saved} />
             </div>
           )}
 
+          {check && <EvaCheckView check={check} />}
+          {look && zone && <OutlookBar zone={zone} slots={look.slots} next={look.next} title="EVA window · next 24 h" />}
           {plan.status !== "in_progress" && plan.status !== "done" && (
-            <Button disabled={!saved || stale || !!draft || startEva.isPending}
+            <Button variant={check?.level === "critical" ? "destructive" : "default"} disabled={!saved || stale || !!draft || startEva.isPending}
               onClick={() => startEva.mutate(plan, { onSuccess: () => toast.success("EVA started: the helmet shows this route") })}>
-              <Play /> Start EVA
+              <Play /> {check?.level === "critical" ? "Start EVA anyway" : "Start EVA"}
             </Button>
           )}
         </div>
@@ -191,8 +261,8 @@ function PlanCard({ n, plan, selected, hm, start, draft, onSelect, onDraft }: {
 }
 
 // ------------------------------------------------------------------------------------------------
-function ShipMap({ zone, hm, crew, home, plans, sel, active, start, draft, onPick, onSelect }: {
-  zone: Zone; hm: Heightmap; crew: Crew; home: [number, number] | null; plans: WorkPlan[]; sel: WorkPlan | null; active: WorkPlan | undefined;
+function ShipMap({ zone, hm, crew, home, plans, sel, active, env, start, draft, onPick, onSelect }: {
+  zone: Zone; hm: Heightmap; crew: Crew; home: [number, number] | null; plans: WorkPlan[]; sel: WorkPlan | null; active: WorkPlan | undefined; env: Env;
   start: Start | null; draft: PathResult | null; onPick: (lat: number, lon: number) => void; onSelect: (id: string) => void;
 }) {
   const live = astronautAt(active);
@@ -200,6 +270,7 @@ function ShipMap({ zone, hm, crew, home, plans, sel, active, start, draft, onPic
   return (
     <>
       <ZoneLeafletMap key={crew.id} zone={zone} hm={hm} onPick={onPick} className="size-full">
+        <HazardAreas events={env.evs} zoneId={zone.id} now={env.now} />
         {home && (
           <Marker position={home} icon={pin(`${DOT} bg-landing`, "", 16)}>
             <Tooltip direction="top" offset={[0, -8]}>Landing site · {crew.ship || crew.name}</Tooltip>
@@ -245,6 +316,7 @@ function ShipMap({ zone, hm, crew, home, plans, sel, active, start, draft, onPic
         <Legend cls="bg-live" label="Astronaut (live)" />
         <div className="flex items-center gap-2"><span className="h-0.5 w-4 bg-route" />Route in the helmet</div>
         <div className="flex items-center gap-2"><span className="h-0.5 w-4 border-t-2 border-dashed border-live" />New route, not sent</div>
+        <div className="flex items-center gap-2"><span className="size-2.5 rounded-full border-2 border-amber-400 bg-amber-400/30" />Anomaly (dashed: forecast)</div>
       </div>
     </>
   );

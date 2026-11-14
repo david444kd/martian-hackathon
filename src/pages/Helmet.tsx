@@ -1,14 +1,19 @@
 // EVA HELMET: shows the crew's active work plan (the one the ship started) by itself; no input
 // needed beyond entering VR once. The walk along the route is simulated (the helmet has no real
 // positioning) and reported back as telemetry, so the ship and mission control see the astronaut move.
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+// Alerts (anomalies, forecasts, messages) appear at eye level and are read out loud: hands-free.
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams } from "react-router";
 import type * as THREE from "three";
 import { Glasses, HardHat, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { activePlan, useCrews, usePlans, useReportProgress } from "../lib/queries";
+import { activePlan, useCrews, useEvents, usePlans, useReportProgress } from "../lib/queries";
 import type { WorkPlan } from "../lib/types";
+import { areaHazards, crewAlerts, type Alert } from "../lib/hazards";
+import { conditions, fmtLmst, useNow } from "../lib/mars";
+import { astronautAt } from "../astro/checkpoints";
+import { AlertList } from "../components/alerts";
 import { crewHome, useHeightmap, useZone } from "../lib/zones";
 import { fmtDur, fmtKm } from "../lib/geo";
 import { Brand, CrewPicker, ErrorNote } from "../components/common";
@@ -38,6 +43,14 @@ export function Helmet() {
   const active = activePlan(plans.data), plan = active?.route ? active : null; // an EVA with a route to follow
   const progress = useSimulatedWalk(plan);
 
+  const events = useEvents(), now = useNow(5000);
+  const evs = useMemo(() => events.data ?? [], [events.data]);
+  const at = plan ? astronautAt({ ...plan, progress_m: progress }) : home;
+  const alerts = crew ? crewAlerts(crew, zone, plan, evs, now, at) : [];
+  const cond = zone ? conditions(zone, now, evs) : null;
+  const hazards = useMemo(() => (zone ? areaHazards(evs, zone.id, now) : []), [evs, zone, now]);
+  const speak = useAlertVoice(alerts);
+
   const [session, setSession] = useState<XRSession | null>(null);
   const [vrOk, setVrOk] = useState<boolean | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -47,6 +60,7 @@ export function Helmet() {
   async function enterVr() {
     const gl = glRef.current;
     if (!gl || !navigator.xr) return;
+    speak.unlock();
     try {
       const s = await navigator.xr.requestSession("immersive-vr", { optionalFeatures: ["local-floor", "bounded-floor"] });
       await gl.xr.setSession(s);
@@ -63,14 +77,15 @@ export function Helmet() {
     <div className="relative h-full bg-black">
       {hm.data && home && (
         <Suspense fallback={null}>
-          <Scene hm={hm.data} home={home} plan={plan} progress={progress} onGl={onGl} onXr={setSession} />
+          <Scene hm={hm.data} home={home} plan={plan} progress={progress} cond={cond} alerts={alerts} hazards={hazards} onGl={onGl} onXr={setSession} />
         </Suspense>
       )}
 
       {/* status strip (screens only; in the headset the same is on the in-world panel) */}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-3 bg-gradient-to-b from-black/60 to-transparent p-4">
         <Brand product="EVA Helmet" icon={<HardHat />} />
-        <div className="w-80 max-w-[60%] rounded-xl border bg-card/80 p-3 text-sm backdrop-blur-md">
+        <div className="flex w-80 max-w-[60%] flex-col gap-2">
+        <div className="rounded-xl border bg-card/80 p-3 text-sm backdrop-blur-md">
           {plan && route ? (
             <>
               <div className="flex items-center gap-1.5 text-xs font-medium text-live"><span className="size-1.5 animate-pulse rounded-full bg-live" /> EVA active · {crew?.name}</div>
@@ -87,6 +102,13 @@ export function Helmet() {
               <div className="mt-0.5 text-sm">Waiting for the ship to start an EVA.</div>
             </>
           )}
+          {cond && (
+            <div className="mt-2 border-t pt-2 text-xs text-muted-foreground tabular-nums">
+              {cond.tempC} °C · wind {cond.windMs} m/s · dust τ {cond.tau.toFixed(1)} · {cond.doseUSvH} µSv/h · LMST {fmtLmst(cond.time.lmst)}
+            </div>
+          )}
+        </div>
+        <AlertList alerts={alerts} max={3} className="backdrop-blur-md" />
         </div>
       </div>
 
@@ -104,6 +126,47 @@ export function Helmet() {
       )}
     </div>
   );
+}
+
+/**
+ * New warnings and critical alerts are announced: a tone, then the alert read out (speech synthesis),
+ * since in the headset nothing can be clicked. Browsers only allow sound after a user gesture, so
+ * `unlock` is called from the Enter VR button.
+ */
+function useAlertVoice(alerts: Alert[]) {
+  const heard = useRef<Set<string> | null>(null);
+  const audio = useRef<AudioContext | null>(null);
+  useEffect(() => {
+    const loud = alerts.filter((a) => a.level !== "info");
+    const key = (a: Alert) => `${a.id}:${a.level}:${a.title}`;
+    if (!heard.current) { heard.current = new Set(loud.map(key)); return; } // don't announce what was already there on load
+    const fresh = loud.filter((a) => !heard.current!.has(key(a)));
+    fresh.forEach((a) => heard.current!.add(key(a)));
+    if (!fresh.length) return;
+    const ctx = audio.current;
+    if (ctx && ctx.state === "running") {
+      const critical = fresh.some((a) => a.level === "critical");
+      [0, 0.22, ...(critical ? [0.44] : [])].forEach((t) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.value = critical ? 880 : 660;
+        g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
+        g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.18);
+        o.connect(g).connect(ctx.destination);
+        o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.2);
+      });
+    }
+    if ("speechSynthesis" in window) {
+      const u = new SpeechSynthesisUtterance(fresh.map((a) => `${a.level === "critical" ? "Warning. " : ""}${a.title}. ${a.text}`).join(" "));
+      u.lang = "en-US"; u.rate = 1.05;
+      window.speechSynthesis.speak(u);
+    }
+  }, [alerts]);
+  return {
+    unlock() {
+      try { audio.current ??= new AudioContext(); void audio.current.resume(); } catch { /* no audio: the panel still shows */ }
+    },
+  };
 }
 
 /**

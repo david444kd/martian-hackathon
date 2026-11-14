@@ -2,13 +2,17 @@
 // martian-map's pathfind.py). The heightmap is searched with A*: each step costs the time it takes
 // to walk it in a suit (Tobler's hiking function, slowed for the suit), steps steeper than
 // AVOID_DEG cost PENALTY times more, steeper than BLOCK_DEG are not allowed. The grid path is then
-// straightened wherever a direct line is no slower and no steeper.
+// straightened wherever a direct line is no slower and no steeper. Anomalies on the ground (a dust
+// storm, a rockfall: lib/hazards.ts) are areas the search avoids: closed ones are not entered at all,
+// the others cost AREA_PENALTY times more to cross.
 import { heightAt, toLL, toPx, type Zone } from "./zones";
 import type { RoutePoint } from "./types";
+import type { Avoid } from "./hazards";
 
 const AVOID_DEG = 15;
 const BLOCK_DEG = 25;
 const PENALTY = 6;
+const AREA_PENALTY = 12;
 const SUIT_FACTOR = 0.35;
 const TAN_AVOID = Math.tan((AVOID_DEG * Math.PI) / 180);
 const TAN_BLOCK = Math.tan((BLOCK_DEG * Math.PI) / 180);
@@ -33,14 +37,31 @@ export interface PathResult {
   max_slope_deg: number;
 }
 
-export function findPath(zone: Zone, h: Float32Array, from: [number, number], to: [number, number]): PathResult | null {
+/** a cost multiplier per grid cell from the areas to avoid (an area around the start or the target can't be closed) */
+function areaCosts(zone: Zone, avoid: Avoid[], from: [number, number], to: [number, number]): Float32Array | null {
+  if (!avoid.length) return null;
+  const W = zone.width, H = zone.height, mult = new Float32Array(W * H).fill(1);
+  for (const a of avoid) {
+    const [cx, cy] = toPx(zone, a.lat, a.lon), rx = a.radius_m / zone.dx, ry = a.radius_m / zone.dy;
+    const inside = (ll: [number, number]) => { const [x, y] = toPx(zone, ll[0], ll[1]); return ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1; };
+    const value = a.block && !inside(from) && !inside(to) ? Infinity : AREA_PENALTY;
+    for (let y = Math.max(0, Math.floor(cy - ry)); y <= Math.min(H - 1, Math.ceil(cy + ry)); y++) {
+      for (let x = Math.max(0, Math.floor(cx - rx)); x <= Math.min(W - 1, Math.ceil(cx + rx)); x++) {
+        if (((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1) mult[y * W + x] = Math.max(mult[y * W + x], value);
+      }
+    }
+  }
+  return mult;
+}
+
+export function findPath(zone: Zone, h: Float32Array, from: [number, number], to: [number, number], avoid: Avoid[] = []): PathResult | null {
   const W = zone.width, H = zone.height, dx = zone.dx, dy = zone.dy;
-  const cell = (ll: [number, number]) => {
-    const [x, y] = toPx(zone, ll[0], ll[1]);
-    return Math.min(H - 1, Math.max(0, Math.floor(y))) * W + Math.min(W - 1, Math.max(0, Math.floor(x)));
-  };
+  const clampCell = (x: number, y: number) => Math.min(H - 1, Math.max(0, Math.floor(y))) * W + Math.min(W - 1, Math.max(0, Math.floor(x)));
+  const cell = (ll: [number, number]) => { const [x, y] = toPx(zone, ll[0], ll[1]); return clampCell(x, y); };
   const s = cell(from), g = cell(to);
   const gx = g % W, gy = (g / W) | 0;
+  const area = areaCosts(zone, avoid, from, to);
+  const areaAt = (x: number, y: number) => (area ? area[clampCell(x, y)] : 1);
 
   // --- A* on the 8-connected grid ---
   const N = W * H;
@@ -66,7 +87,7 @@ export function findPath(zone: Zone, h: Float32Array, from: [number, number], to
       if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
       const j = ny * W + nx;
       if (done[j]) continue;
-      const c = cost[i] + stepCost(d, h[j] - hi);
+      const c = cost[i] + stepCost(d, h[j] - hi) * (area ? area[j] : 1);
       if (c < cost[j]) {
         cost[j] = c;
         prev[j] = i;
@@ -93,7 +114,7 @@ export function findPath(zone: Zone, h: Float32Array, from: [number, number], to
     for (let k = 1; k <= n; k++) {
       const h1 = hAt(a[0] + sx * k, a[1] + sy * k);
       if (len > 0) {
-        t += stepCost(len, h1 - h0);
+        t += stepCost(len, h1 - h0) * areaAt(a[0] + sx * k, a[1] + sy * k);
         maxTan = Math.max(maxTan, Math.abs(h1 - h0) / len);
       }
       h0 = h1;

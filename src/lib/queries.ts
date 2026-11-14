@@ -2,13 +2,14 @@
 // up on the ship and in the helmet within a few seconds.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { db } from "./db";
-import type { NewCrew, NewPlan, PlanPatch } from "./types";
+import type { EventPatch, NewCrew, NewEvent, NewPlan, PlanPatch } from "./types";
 
 const POLL_MS = 3000;
 
 const keys = {
   crews: ["crews"] as const,
   plans: (crewId?: string) => ["plans", crewId ?? "all"] as const,
+  events: ["events"] as const,
 };
 
 export const useCrews = () =>
@@ -17,11 +18,16 @@ export const useCrews = () =>
 export const usePlans = (crewId?: string) =>
   useQuery({ queryKey: keys.plans(crewId), queryFn: () => db.listPlans(crewId), refetchInterval: POLL_MS });
 
+/** anomalies, forecasts and messages: every app polls the same list */
+export const useEvents = () =>
+  useQuery({ queryKey: keys.events, queryFn: db.listEvents, refetchInterval: POLL_MS });
+
 function useRefresh() {
   const qc = useQueryClient();
   return () => Promise.all([
     qc.invalidateQueries({ queryKey: ["crews"] }),
     qc.invalidateQueries({ queryKey: ["plans"] }),
+    qc.invalidateQueries({ queryKey: keys.events }),
   ]);
 }
 
@@ -44,6 +50,19 @@ export function useUpdatePlan() {
 export function useDeletePlan() {
   const refresh = useRefresh();
   return useMutation({ mutationFn: (id: string) => db.deletePlan(id), onSuccess: refresh });
+}
+
+export function useCreateEvent() {
+  const refresh = useRefresh();
+  return useMutation({ mutationFn: (e: NewEvent) => db.createEvent(e), onSuccess: refresh });
+}
+export function useUpdateEvent() {
+  const refresh = useRefresh();
+  return useMutation({ mutationFn: ({ id, patch }: { id: string; patch: EventPatch }) => db.updateEvent(id, patch), onSuccess: refresh });
+}
+export function useDeleteEvent() {
+  const refresh = useRefresh();
+  return useMutation({ mutationFn: (id: string) => db.deleteEvent(id), onSuccess: refresh });
 }
 
 /** the ship starts an EVA: this plan becomes the crew's active one (any other active plan goes back to assigned) */

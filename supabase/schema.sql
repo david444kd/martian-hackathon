@@ -58,5 +58,3 @@ grant select, insert, update, delete on public.crews, public.work_plans to anon,
 -- a first crew so the pages are not empty (skipped if any crew exists)
 insert into public.crews (name, ship, zone, lat, lon)
 select 'Ares-1', 'Hermes', 'jezero', 18.4447, 77.4508 where not exists (select 1 from public.crews);
-
--- (an older database: supabase/migrations/002_landing_and_eva.sql adds the newer columns)

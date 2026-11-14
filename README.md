@@ -1,54 +1,58 @@
 # Mars Ops — hackathon
 
-Three interfaces for Mars surface operations, linked through Supabase (polling, no backend):
+Three applications for Mars surface operations on one codebase, linked through Supabase (each page
+polls every 3 s; no backend of our own):
 
-| Page | URL | Does |
+| App | URL | What it does |
 |---|---|---|
-| Dispatch | `/dispatch` | create / delete crews; create, edit, delete each crew's work plans (target picked on the map) |
-| Ship | `/ship/:crewId` | the crew's plans; makes a safe walking route (A* in a Web Worker) and sends it to the astronaut |
-| Astronaut | `/astronaut/:crewId/:planId` | follows the route in 3D: surface view (1:1) or relief model on a table; **Enter VR** on Meta Quest |
+| **Mission Control** | `/dispatch` | Mars globe with every crew on the surface; register crews; create, edit, delete their work plans |
+| **Ship Console** | `/ship/:crewId` | the crew's zone on a full-screen map; makes a safe walking route for a plan (A* in a Web Worker), sends it to the helmet, starts / ends the EVA |
+| **EVA Helmet** | `/helmet/:crewId` | Meta Quest 2 (WebXR): shows the active EVA's route on the surface hands-free; the walk is simulated and reported back as telemetry |
+
+Stack: Vite, React 19, TypeScript, TanStack Query, react-router, Tailwind v4 + shadcn/ui,
+react-leaflet (2D maps), three.js / react-three-fiber (globe and helmet).
 
 ```
-martian-hackathon/
-├── src/lib/                  db (Supabase), queries (TanStack), zones, pathfind (A*), geo
-├── src/pages/                Dispatch, Ship, Astronaut
-├── src/astro/                the 3D / WebXR scene
-├── public/zones/             512×512 heightmaps (20 m/px) of Jezero and Gale + zones.json
-├── supabase/schema.sql       the two tables: crews, work_plans (route is a jsonb column)
-└── scripts/build_zones.py    cuts the heightmaps from the 20 m DTMs (already done; output is committed)
+src/
+├── pages/            Dispatch, Ship, Helmet (one per app)
+├── dispatch/         the globe and the dispatcher's dialogs
+├── astro/            the helmet's 3D scene: terrain, close-up imagery, route, HUD, mini-map
+├── components/       shared: zone map (Leaflet), map pins, status / route / EVA cards; ui/ = shadcn
+└── lib/              Supabase access (db), TanStack Query hooks, zones, A* route search, geo helpers
+public/
+├── zones/            512×512 heightmaps (20 m/px) of Jezero and Gale, zones.json, 4096² photo textures
+└── textures/         the globe's Mars map (Viking colour, 4096×2048)
+supabase/schema.sql   the two tables: crews (with landing point), work_plans (route + EVA progress)
+scripts/              one-off data builders (already run; their output is committed)
 ```
 
 ## Run
-
-Vite + React 19 + TypeScript, TanStack Query, react-router, three / react-three-fiber.
 
 ```bash
 npm install
 npm run dev          # http://localhost:5173
 ```
 
-## Connect Supabase
-
-1. Create a project on supabase.com.
-2. SQL Editor → New query → paste `supabase/schema.sql` → Run.
-3. Project Settings → API Keys: put the Project URL and the publishable key into `.env.local`
-   (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`; see `.env.example`), restart `npm run dev`.
+`.env.local` (see `.env.example`) holds `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`.
+A new Supabase project: SQL Editor → paste `supabase/schema.sql` → Run.
 
 ## Meta Quest 2
 
-WebXR needs HTTPS. On the same Wi-Fi:
-```bash
-npm run dev:quest    # HTTPS on the local network, prints https://192.168.x.x:5173
-```
-Open that address in the Quest browser, accept the self-signed certificate, open a plan on the
-Astronaut page → **Enter VR**. Right trigger: next checkpoint, left trigger: back, grip: map / surface.
-A deployed copy (Vercel, Netlify, Cloudflare Pages) is HTTPS already.
+Open the deployed site (HTTPS) in the Quest browser → EVA Helmet → **Enter VR**. Everything after that
+runs by itself: the helmet follows whichever plan the ship has started.
 
-## Routes
+- `?speed=30` (default): how much faster than real walking the simulated EVA goes; `?speed=1` is real time
+- `?lite`: cheaper rendering if the headset drops frames
 
-The ship's route search is a TypeScript port of martian-map's `pathfind.py`: A* over the zone's
-heightmap; each step costs its suited walking time (Tobler's hiking function), slopes over 15° cost
-6× more, over 25° are impassable; the grid path is then straightened. Saved as `work_plans.route`:
-`{ start, target, points: [[lat, lon, elev], …] (~40 m apart), distance_m, duration_min, ascent_m, descent_m, max_slope_deg, generated_at }`.
+To try the dev server in the headset instead: `npm run dev:quest` (HTTPS on the local network with a
+self-signed certificate; accept the warning once).
 
-When mission control moves a plan's target, the stored route is cleared so the crew makes a new one.
+## Data
+
+- Heightmaps: CTX (Jezero) and HiRISE (Gale) DTMs at 20 m, via `scripts/build_zones.py`.
+- Imagery: HiRISE / CTX mosaics from NASA Mars Trek and Esri (Caltech Murray Lab), fetched live by the
+  maps and the helmet's close-up; the helmet's zone-wide textures come from `scripts/build_zone_photos.py`.
+- Routes: A* over the heightmap, each step costing its suited walking time (Tobler's hiking
+  function); slopes over 15° cost 6× more, over 25° are impassable; then straightened. Stored as
+  `work_plans.route = { start, target, points: [[lat, lon, elev], …], distance_m, duration_min, ascent_m, descent_m, max_slope_deg, generated_at }`.
+  When mission control moves a plan's target, the stored route is cleared so the ship makes a new one.

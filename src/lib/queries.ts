@@ -4,12 +4,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { db } from "./db";
 import type { NewCrew, NewPlan, PlanPatch } from "./types";
 
-export const POLL_MS = 3000;
+const POLL_MS = 3000;
 
-export const keys = {
+const keys = {
   crews: ["crews"] as const,
   plans: (crewId?: string) => ["plans", crewId ?? "all"] as const,
-  plan: (id: string) => ["plan", id] as const,
 };
 
 export const useCrews = () =>
@@ -18,15 +17,11 @@ export const useCrews = () =>
 export const usePlans = (crewId?: string) =>
   useQuery({ queryKey: keys.plans(crewId), queryFn: () => db.listPlans(crewId), refetchInterval: POLL_MS });
 
-export const usePlan = (id: string | undefined) =>
-  useQuery({ queryKey: keys.plan(id ?? ""), queryFn: () => db.getPlan(id!), enabled: !!id, refetchInterval: POLL_MS });
-
 function useRefresh() {
   const qc = useQueryClient();
   return () => Promise.all([
     qc.invalidateQueries({ queryKey: ["crews"] }),
     qc.invalidateQueries({ queryKey: ["plans"] }),
-    qc.invalidateQueries({ queryKey: ["plan"] }),
   ]);
 }
 

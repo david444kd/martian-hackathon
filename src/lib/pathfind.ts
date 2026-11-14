@@ -6,8 +6,8 @@
 import { heightAt, toLL, toPx, type Zone } from "./zones";
 import type { RoutePoint } from "./types";
 
-export const AVOID_DEG = 15;
-export const BLOCK_DEG = 25;
+const AVOID_DEG = 15;
+const BLOCK_DEG = 25;
 const PENALTY = 6;
 const SUIT_FACTOR = 0.35;
 const TAN_AVOID = Math.tan((AVOID_DEG * Math.PI) / 180);

@@ -3,7 +3,6 @@
 // origin at the zone centre.
 import * as THREE from "three";
 import { heightAt, toPx, type Heightmap } from "../lib/zones";
-import { ramp, shade } from "../lib/relief";
 
 export const MESH_STEP = 1; // every heightmap cell (20 m): 512 × 512 vertices
 
@@ -17,10 +16,10 @@ export function localOf(hm: Heightmap, lat: number, lon: number, lift = 0): THRE
  * A terrain mesh over heightmap cells [i0, i1) × [j0, j1), every `step` cells, in the local frame.
  * uv(x, y) gives the texture coordinate of a point in pixel coordinates.
  */
-function grid(hm: Heightmap, i0: number, i1: number, j0: number, j1: number, step: number, uv: (x: number, y: number) => [number, number], colours = false) {
-  const { width: W, height: H, dx, dy, min, max } = hm.zone, h = hm.h;
+function grid(hm: Heightmap, i0: number, i1: number, j0: number, j1: number, step: number, uv: (x: number, y: number) => [number, number]) {
+  const { width: W, height: H, dx, dy, min } = hm.zone, h = hm.h;
   const n = Math.floor((i1 - 1 - i0) / step) + 1, m = Math.floor((j1 - 1 - j0) / step) + 1;
-  const pos = new Float32Array(n * m * 3), tex = new Float32Array(n * m * 2), col = colours ? new Float32Array(n * m * 3) : null;
+  const pos = new Float32Array(n * m * 3), tex = new Float32Array(n * m * 2);
   for (let j = 0; j < m; j++) {
     for (let i = 0; i < n; i++) {
       const px = i0 + i * step, py = j0 + j * step, v = j * n + i, e = h[py * W + px];
@@ -30,12 +29,6 @@ function grid(hm: Heightmap, i0: number, i1: number, j0: number, j1: number, ste
       const [u, w] = uv(px + 0.5, py + 0.5);
       tex[v * 2] = u;
       tex[v * 2 + 1] = w;
-      if (col) {
-        const [r, g, b] = ramp((e - min) / (max - min || 1)), s = 0.3 + 0.9 * shade(h, W, H, dx, dy, px, py);
-        col[v * 3] = srgbToLinear(Math.min(1, (r * s) / 255));
-        col[v * 3 + 1] = srgbToLinear(Math.min(1, (g * s) / 255));
-        col[v * 3 + 2] = srgbToLinear(Math.min(1, (b * s) / 255));
-      }
     }
   }
   const idx = new Uint32Array((n - 1) * (m - 1) * 6);
@@ -50,7 +43,6 @@ function grid(hm: Heightmap, i0: number, i1: number, j0: number, j1: number, ste
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   g.setAttribute("uv", new THREE.BufferAttribute(tex, 2));
-  if (col) g.setAttribute("color", new THREE.BufferAttribute(col, 3));
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   g.computeBoundingSphere();
   return g;
@@ -59,7 +51,7 @@ function grid(hm: Heightmap, i0: number, i1: number, j0: number, j1: number, ste
 /** the whole zone; uv maps the zone's photo texture (row 0 = north = top of the image) */
 export function terrainGeometry(hm: Heightmap, step = MESH_STEP): THREE.BufferGeometry {
   const { width: W, height: H } = hm.zone;
-  return grid(hm, 0, W, 0, H, step, (x, y) => [x / W, 1 - y / H], true);
+  return grid(hm, 0, W, 0, H, step, (x, y) => [x / W, 1 - y / H]);
 }
 
 /** the part of the zone inside lat/lon bounds, with uv spanning those bounds (for a close-up texture) */
@@ -70,8 +62,6 @@ export function patchGeometry(hm: Heightmap, b: { north: number; south: number; 
   const j0 = Math.max(0, Math.floor(y0)), j1 = Math.min(z.height, Math.ceil(y1));
   return grid(hm, i0, i1, j0, j1, 1, (x, y) => [(x - x0) / (x1 - x0), 1 - (y - y0) / (y1 - y0)]);
 }
-
-const srgbToLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 
 /** a text label as a sprite texture */
 export function labelTexture(text: string, color: string, bg = "rgba(10,8,6,0.75)") {

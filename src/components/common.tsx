@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
+import { Progress } from "@/components/ui/progress";
 import { Link } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { useCrews } from "../lib/queries";
-import { STATUS_LABEL, type PlanStatus, type Route } from "../lib/types";
+import { STATUS_LABEL, type PlanStatus, type Route, type WorkPlan } from "../lib/types";
 import { fmtDur, fmtKm } from "../lib/geo";
 
 const STATUS_CLASS: Record<PlanStatus, string> = {
@@ -91,6 +92,25 @@ export function CrewPicker({ base, product, icon, question }: { base: string; pr
       </div>
       {crews.isPending && <p className="text-sm text-muted-foreground">Loading crews…</p>}
       {crews.data?.length === 0 && <p className="text-sm text-muted-foreground">No crews yet: mission control adds them.</p>}
+    </div>
+  );
+}
+
+/** the active EVA: plan, how far the astronaut has walked (helmet telemetry), and any controls */
+export function EvaCard({ plan, className, children }: { plan: WorkPlan; className?: string; children?: ReactNode }) {
+  const total = plan.route?.distance_m ?? 0, done = Math.min(plan.progress_m ?? 0, total);
+  return (
+    <div className={cn("rounded-xl border border-live/30 bg-live/10 p-3", className)}>
+      <div className="flex items-center gap-2 text-xs font-medium text-live">
+        <span className="size-1.5 animate-pulse rounded-full bg-live" /> {done >= total - 1 ? "Astronaut at the target" : "EVA in progress"}
+      </div>
+      <div className="mt-1 truncate font-medium">{plan.title}</div>
+      <Progress value={(done / (total || 1)) * 100} className="mt-2 h-1.5 [&>div]:bg-live" />
+      <div className="mt-1.5 flex justify-between text-xs text-muted-foreground tabular-nums">
+        <span>{fmtKm(done)} of {fmtKm(total)}</span>
+        <span>{fmtKm(total - done)} to go</span>
+      </div>
+      {children}
     </div>
   );
 }

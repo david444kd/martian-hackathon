@@ -6,7 +6,6 @@ import "leaflet/dist/leaflet.css";
 import "./index.css";
 import { App } from "./App";
 import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } },
@@ -15,12 +14,10 @@ const queryClient = new QueryClient({
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
-        <Toaster position="bottom-center" />
-      </TooltipProvider>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+      <Toaster position="bottom-center" />
     </QueryClientProvider>
   </StrictMode>,
 );

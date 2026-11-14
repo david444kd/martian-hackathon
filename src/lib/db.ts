@@ -16,7 +16,6 @@ interface Db {
   createCrew(c: NewCrew): Promise<Crew>;
   deleteCrew(id: string): Promise<void>;
   listPlans(crewId?: string): Promise<WorkPlan[]>;
-  getPlan(id: string): Promise<WorkPlan | null>;
   createPlan(p: NewPlan): Promise<WorkPlan>;
   updatePlan(id: string, patch: PlanPatch): Promise<WorkPlan>;
   deletePlan(id: string): Promise<void>;
@@ -29,8 +28,7 @@ function supabaseDb(url: string, key: string): Db {
     return data as T;
   };
   return {
-    // rows from before migration 002 have no zone / landing point yet
-    listCrews: async () => ok<Crew[]>(await sb.from("crews").select("*").order("created_at")).map((c) => ({ ...c, zone: c.zone ?? "jezero", lat: c.lat ?? null, lon: c.lon ?? null })),
+    listCrews: async () => ok(await sb.from("crews").select("*").order("created_at")),
     createCrew: async (c) => ok(await sb.from("crews").insert(c).select().single()),
     deleteCrew: async (id) => { ok(await sb.from("crews").delete().eq("id", id)); },
     listPlans: async (crewId) => {
@@ -38,14 +36,13 @@ function supabaseDb(url: string, key: string): Db {
       if (crewId) q = q.eq("crew_id", crewId);
       return ok(await q);
     },
-    getPlan: async (id) => ok(await sb.from("work_plans").select("*").eq("id", id).maybeSingle()),
     createPlan: async (p) => ok(await sb.from("work_plans").insert(p).select().single()),
     updatePlan: async (id, patch) => ok(await sb.from("work_plans").update(patch).eq("id", id).select().single()),
     deletePlan: async (id) => { ok(await sb.from("work_plans").delete().eq("id", id)); },
   };
 }
 
-const missing = () => Promise.reject(new Error(configError!));
+// without keys every call fails with the explanation (the app also shows it in a banner)
 export const db: Db = configError
-  ? { listCrews: missing, createCrew: missing, deleteCrew: missing, listPlans: missing, getPlan: missing, createPlan: missing, updatePlan: missing, deletePlan: missing }
+  ? new Proxy({} as Db, { get: () => () => Promise.reject(new Error(configError!)) })
   : supabaseDb(URL!, KEY!);

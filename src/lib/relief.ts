@@ -3,14 +3,14 @@
 // Mars ramp: low → high
 const RAMP: [number, number, number][] = [[58, 30, 22], [120, 62, 38], [176, 98, 58], [214, 150, 98], [236, 205, 160]];
 
-export function ramp(t: number): [number, number, number] {
+function ramp(t: number): [number, number, number] {
   const f = Math.min(Math.max(t, 0), 1) * (RAMP.length - 1), i = Math.min(RAMP.length - 2, Math.floor(f)), k = f - i;
   const a = RAMP[i], b = RAMP[i + 1];
   return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 }
 
 /** hillshade (sun from the north-west, 40° up) in 0..1 for cell i */
-export function shade(h: Float32Array, W: number, H: number, dx: number, dy: number, x: number, y: number) {
+function shade(h: Float32Array, W: number, H: number, dx: number, dy: number, x: number, y: number) {
   const xl = Math.max(0, x - 1), xr = Math.min(W - 1, x + 1), yu = Math.max(0, y - 1), yd = Math.min(H - 1, y + 1);
   const gx = (h[y * W + xr] - h[y * W + xl]) / ((xr - xl) * dx);
   const gy = (h[yd * W + x] - h[yu * W + x]) / ((yd - yu) * dy);

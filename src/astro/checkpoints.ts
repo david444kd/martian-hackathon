@@ -1,6 +1,6 @@
 // Checkpoints along a route (no three.js here, so the plain pages stay light).
 import { distanceM, bearingDeg } from "../lib/geo";
-import type { Route } from "../lib/types";
+import type { Route, WorkPlan } from "../lib/types";
 
 export interface Checkpoint {
   i: number;        // index into route.points
@@ -24,16 +24,10 @@ export function checkpoints(route: Route, spacing = 250): Checkpoint[] {
   return out;
 }
 
-export function legInfo(route: Route, cps: Checkpoint[], k: number) {
-  const total = cps[cps.length - 1].along || 1, here = cps[k], next = cps[Math.min(k + 1, cps.length - 1)];
-  const a = route.points[here.i], b = route.points[next.i];
-  return {
-    nextDist: next.along - here.along,
-    bearing: bearingDeg(a[0], a[1], b[0], b[1]),
-    remaining: total - here.along,
-    remainingMin: route.duration_min * ((total - here.along) / total),
-    atEnd: k === cps.length - 1,
-  };
+/** compass heading from checkpoint k to the next one */
+export function legBearing(route: Route, cps: Checkpoint[], k: number) {
+  const a = route.points[cps[k].i], b = route.points[cps[Math.min(k + 1, cps.length - 1)].i];
+  return bearingDeg(a[0], a[1], b[0], b[1]);
 }
 
 /** metres from the start to each route point */
@@ -59,4 +53,10 @@ export function checkpointAt(cps: Checkpoint[], m: number) {
   let k = 0;
   while (k + 1 < cps.length && cps[k + 1].along <= m + 0.5) k++;
   return k;
+}
+
+/** where the astronaut of an active EVA is now (from the helmet's telemetry), or null */
+export function astronautAt(plan: WorkPlan | undefined | null): [number, number] | null {
+  if (plan?.status !== "in_progress" || !plan.route) return null;
+  return pointAt(plan.route, alongs(plan.route), plan.progress_m ?? 0);
 }

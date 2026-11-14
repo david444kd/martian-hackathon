@@ -3,9 +3,8 @@ import { useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, OrbitControls, Stars, useTexture } from "@react-three/drei";
 import * as THREE from "three";
-import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
-export interface GlobeCrew { id: string; name: string; lat: number; lon: number; active: boolean }
+interface GlobeCrew { id: string; name: string; lat: number; lon: number; active: boolean }
 
 interface Props {
   crews: GlobeCrew[];
@@ -14,7 +13,7 @@ interface Props {
 }
 
 /** a point on the unit sphere for an equirectangular texture with longitude -180 at its left edge */
-export function onSphere(lat: number, lon: number, r = 1) {
+function onSphere(lat: number, lon: number, r = 1) {
   const la = THREE.MathUtils.degToRad(lat), ph = THREE.MathUtils.degToRad(lon + 180);
   return new THREE.Vector3(-Math.cos(ph) * Math.cos(la) * r, Math.sin(la) * r, Math.sin(ph) * Math.cos(la) * r);
 }
@@ -116,7 +115,6 @@ function Marker({ crew, selected, onSelect }: { crew: GlobeCrew; selected: boole
 
 /** orbit controls; flies to a crew when one is picked, turns slowly while nothing is */
 function CameraRig({ crews, selected }: Props) {
-  const controls = useRef<OrbitControlsImpl>(null);
   const camera = useThree((s) => s.camera);
   const flight = useRef<{ to: THREE.Vector3; t: number } | null>(null);
   const crew = crews.find((c) => c.id === selected);
@@ -140,7 +138,7 @@ function CameraRig({ crews, selected }: Props) {
   });
 
   return (
-    <OrbitControls ref={controls} enablePan={false} minDistance={1.4} maxDistance={8} rotateSpeed={0.5} zoomSpeed={0.7}
+    <OrbitControls enablePan={false} minDistance={1.4} maxDistance={8} rotateSpeed={0.5} zoomSpeed={0.7}
       autoRotate={!selected} autoRotateSpeed={0.35} enableDamping
       onStart={() => { flight.current = null; }} />
   );

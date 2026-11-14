@@ -11,7 +11,7 @@ import type { Route, WorkPlan } from "../lib/types";
 import { labelTexture, localOf, patchGeometry, terrainGeometry } from "./geometry";
 import { useCloseup } from "./closeup";
 import { closeupMaterial, detailTexture } from "./detail";
-import { alongs, checkpointAt, checkpoints, legInfo, pointAt, type Checkpoint } from "./checkpoints";
+import { alongs, checkpointAt, checkpoints, legBearing, pointAt, type Checkpoint } from "./checkpoints";
 import { compass, fmtDur, fmtKm } from "../lib/geo";
 
 const ROUTE = new THREE.Color("#ffb347");
@@ -19,7 +19,7 @@ const SKY = "#c9946a";
 const MINI_SIZE = 0.42; // m, the mini-map's width
 const LITE = new URLSearchParams(location.search).has("lite");
 
-export interface SceneProps {
+interface SceneProps {
   hm: Heightmap;
   home: [number, number];
   plan: WorkPlan | null;   // the active work plan (null: standby)
@@ -56,7 +56,7 @@ function World({ hm, home, plan, progress, onXr }: SceneProps) {
   const step = route ? checkpointAt(cps, progress) : 0;
   const M = useSurfaceMatrix(hm, home, route, cps, step);
   const geo = useMemo(() => terrainGeometry(hm, LITE ? 2 : 1), [hm]);
-  const t = useMemo(() => { const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3(); M.decompose(p, q, s); return { p, q, s }; }, [M]);
+  const t = useMemo(() => placement(M), [M]);
   const gl = useThree((s) => s.gl);
   const [presenting, setPresenting] = useState(false);
 
@@ -93,11 +93,18 @@ function World({ hm, home, plan, progress, onXr }: SceneProps) {
 
 type Placement = { p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3 };
 
-/** the zone's terrain with its orbital photo (elevation colours until the photo has loaded) */
+/** a transform as position / rotation / scale props */
+function placement(M: THREE.Matrix4): Placement {
+  const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+  M.decompose(p, q, s);
+  return { p, q, s };
+}
+
+/** the zone's terrain with its orbital photo (plain Mars colour for the moment it loads) */
 function Terrain({ hm, geo, t, offset = false }: { hm: Heightmap; geo: THREE.BufferGeometry; t: Placement; offset?: boolean }) {
   const fallback = (
     <mesh geometry={geo} position={t.p} quaternion={t.q} scale={t.s}>
-      <meshBasicMaterial vertexColors />
+      <meshBasicMaterial color="#a8724a" />
     </mesh>
   );
   return <Suspense fallback={fallback}><PhotoTerrain hm={hm} geo={geo} t={t} offset={offset} /></Suspense>;
@@ -123,8 +130,7 @@ function Closeup({ hm, at, t }: { hm: Heightmap; at: [number, number]; t: Placem
   const c = useCloseup(hm.zone.id, at[0], at[1]);
   const geo = useMemo(() => (c ? patchGeometry(hm, c.bounds) : null), [hm, c]);
   useEffect(() => () => geo?.dispose(), [geo]);
-  useEffect(() => { if (c) { c.texture.anisotropy = gl.capabilities.getMaxAnisotropy(); c.texture.needsUpdate = true; } }, [c, gl]);
-  const mat = useMemo(() => (c ? closeupMaterial(c.texture, detailTexture(), gl.capabilities.getMaxAnisotropy()) : null), [c, gl]);
+  const mat = useMemo(() => (c ? closeupMaterial(c, detailTexture(), gl.capabilities.getMaxAnisotropy()) : null), [c, gl]);
   useEffect(() => () => mat?.dispose(), [mat]);
   if (!c || !geo || !mat) return null;
   return <mesh geometry={geo} material={mat} position={t.p} quaternion={t.q} scale={t.s} renderOrder={1} />;
@@ -232,7 +238,7 @@ function MiniMap({ hm, route, you, home }: { hm: Heightmap; route: Route | null;
   // local terrain frame → mini-map: centred, scaled, heights exaggerated ×2
   const M = useMemo(() => new THREE.Matrix4().makeScale(s, s * 2, s), [s]); // terrain sits on the board
   const geo = useMemo(() => terrainGeometry(hm, 4), [hm]);
-  const t = useMemo(() => { const p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3(); M.decompose(p, q, sc); return { p, q, sc }; }, [M]);
+  const t = useMemo(() => placement(M), [M]);
   const line = useMemo(() => (route ? tube(hm, route, M, 8, 0.0025) : null), [hm, route, M]);
   useEffect(() => () => line?.dispose(), [line]);
   const youAt = localOf(hm, you[0], you[1]).applyMatrix4(M);
@@ -247,7 +253,7 @@ function MiniMap({ hm, route, you, home }: { hm: Heightmap; route: Route | null;
         <boxGeometry args={[MINI_SIZE + 0.03, 0.008, MINI_SIZE + 0.03]} />
         <meshBasicMaterial color="#1a1410" transparent opacity={0.85} />
       </mesh>
-      <Terrain hm={hm} geo={geo} t={{ p: t.p, q: t.q, s: t.sc }} />
+      <Terrain hm={hm} geo={geo} t={t} />
       {line && <mesh geometry={line}><meshBasicMaterial color={ROUTE} /></mesh>}
       <mesh position={homeAt.clone().add(new THREE.Vector3(0, 0.006, 0))}>
         <sphereGeometry args={[0.004, 12, 8]} />
@@ -311,7 +317,7 @@ function Hud({ plan, cps, step, progress }: { plan: WorkPlan | null; cps: Checkp
       ctx.fillText("Waiting for the ship to start an EVA.", 36, 220);
       ctx.fillText("Your route appears here on its own.", 36, 275);
     } else {
-      const L = legInfo(route, cps, step), total = route.distance_m || 1;
+      const bearing = legBearing(route, cps, step), total = route.distance_m || 1;
       const left = Math.max(0, total - progress), arrived = left < 1;
       ctx.fillStyle = "#ffb347"; ctx.font = "bold 44px system-ui, sans-serif";
       ctx.fillText(plan.title.slice(0, 40), 36, 112);
@@ -324,7 +330,7 @@ function Hud({ plan, cps, step, progress }: { plan: WorkPlan | null; cps: Checkp
         const next = cps[step + 1], toNext = Math.max(0, next.along - progress);
         ctx.fillText(`${next.label === "TARGET" ? "Target" : `Checkpoint ${next.label}`} in ${fmtKm(toNext)}`, 36, 180);
         ctx.font = "38px system-ui, sans-serif"; ctx.fillStyle = "#e6e6e6";
-        ctx.fillText(`Heading ${Math.round(L.bearing)}° ${compass(L.bearing)}`, 36, 240);
+        ctx.fillText(`Heading ${Math.round(bearing)}° ${compass(bearing)}`, 36, 240);
         ctx.fillText(`To target ${fmtKm(left)} · ~${fmtDur(route.duration_min * (left / total))}`, 36, 292);
       }
       // progress bar

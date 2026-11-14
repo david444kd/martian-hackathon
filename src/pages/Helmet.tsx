@@ -1,13 +1,14 @@
 // EVA HELMET: shows the crew's active work plan (the one the ship started) by itself; no input
 // needed beyond entering VR once. The walk along the route is simulated (the helmet has no real
 // positioning) and reported back as telemetry, so the ship and mission control see the astronaut move.
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, useParams } from "react-router";
 import type * as THREE from "three";
 import { Glasses, HardHat, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { activePlan, useCrews, usePlans, useReportProgress } from "../lib/queries";
+import type { WorkPlan } from "../lib/types";
 import { crewHome, useHeightmap, useZone } from "../lib/zones";
 import { fmtDur, fmtKm } from "../lib/geo";
 import { Brand, CrewPicker, ErrorNote } from "../components/common";
@@ -34,9 +35,8 @@ export function Helmet() {
   const crew = crews.data?.find((c) => c.id === crewId);
   const zone = useZone(crew?.zone), hm = useHeightmap(zone);
   const home = crew ? crewHome(crew, zone) : null;
-  const plan = activePlan(plans.data)?.route ? activePlan(plans.data)! : null;
-  const progress = useSimulatedWalk(plan?.id ?? null, plan?.route?.generated_at ?? null, plan?.progress_m ?? 0,
-    plan?.route?.distance_m ?? 0, plan?.route?.duration_min ?? 0);
+  const active = activePlan(plans.data), plan = active?.route ? active : null; // an EVA with a route to follow
+  const progress = useSimulatedWalk(plan);
 
   const [session, setSession] = useState<XRSession | null>(null);
   const [vrOk, setVrOk] = useState<boolean | null>(null);
@@ -107,29 +107,29 @@ export function Helmet() {
 }
 
 /**
- * Metres walked along the active route: picks up from the last reported progress and advances at the
- * route's walking pace × SPEED; reports back every few seconds. Restarts when the plan or its route changes.
+ * Metres walked along the plan's route: picks up from the last reported progress and advances at the
+ * route's walking pace × SPEED, reporting back every few seconds. Restarts only when the plan or its
+ * route changes (not on every poll, which brings back our own reports).
  */
-function useSimulatedWalk(planId: string | null, stamp: string | null, reported: number, distance: number, durationMin: number) {
+function useSimulatedWalk(plan: WorkPlan | null) {
   const [m, setM] = useState(0);
-  const report = useReportProgress();
-  const sim = useRef<{ key: string; p0: number; t0: number } | null>(null);
-  const key = `${planId}|${stamp}`;
-  const pace = durationMin > 0 ? distance / (durationMin * 60) : 0; // m/s
-  const startAt = useMemo(() => reported, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { mutate: report } = useReportProgress();
+  const id = plan?.id, stamp = plan?.route?.generated_at;
 
   useEffect(() => {
-    if (!planId) { sim.current = null; return; }
-    sim.current = { key, p0: Math.min(startAt, distance), t0: performance.now() };
-    const pos = () => (sim.current ? Math.min(distance, sim.current.p0 + ((performance.now() - sim.current.t0) / 1000) * pace * SPEED) : 0);
+    const route = plan?.route;
+    if (!plan || !route) return;
+    const p0 = Math.min(plan.progress_m ?? 0, route.distance_m), t0 = performance.now();
+    const pace = route.duration_min > 0 ? route.distance_m / (route.duration_min * 60) : 0; // m/s
+    const pos = () => Math.min(route.distance_m, p0 + ((performance.now() - t0) / 1000) * pace * SPEED);
     const tick = setInterval(() => setM(pos()), 200);
-    let lastSent = -1;
+    let sent = -1;
     const send = setInterval(() => {
       const p = Math.round(pos());
-      if (p !== lastSent) { lastSent = p; report.mutate({ id: planId, progress_m: p }); }
+      if (p !== sent) { sent = p; report({ id: plan.id, progress_m: p }); }
     }, REPORT_MS);
     return () => { clearInterval(tick); clearInterval(send); };
-  }, [key, planId, distance, pace, startAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, stamp]); // eslint-disable-line react-hooks/exhaustive-deps -- see above
 
-  return planId ? m : 0;
+  return plan ? m : 0;
 }

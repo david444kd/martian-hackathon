@@ -1,6 +1,6 @@
 // SHIP CONSOLE: the crew's zone on a full-screen map, its work plans in a fixed sidebar. The crew
 // makes a safe walking route for a plan, sends it to the helmet and starts / ends the EVA.
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
 import { Marker, Polyline, Tooltip, ZoomControl } from "react-leaflet";
@@ -8,7 +8,6 @@ import { ZoneLeafletMap } from "../components/ZoneLeafletMap";
 import { DOT, LIVE_PIN, pin } from "../components/mapPins";
 import { CheckCircle2, Crosshair, Flag, Loader2, Play, Route as RouteIcon, Send, Ship as ShipIcon, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -19,8 +18,8 @@ import { crewHome, inZone, useHeightmap, useZone, type Heightmap, type Zone } fr
 import { generateRoute } from "../lib/routing";
 import type { PathResult } from "../lib/pathfind";
 import { fmtDate, fmtKm, fmtLL } from "../lib/geo";
-import { alongs, pointAt } from "../astro/checkpoints";
-import { Brand, CrewPicker, ErrorNote, RouteStats, StatusBadge } from "../components/common";
+import { astronautAt } from "../astro/checkpoints";
+import { Brand, CrewPicker, ErrorNote, EvaCard, RouteStats, StatusBadge } from "../components/common";
 
 export function ShipPicker() {
   return <CrewPicker base="/ship" product="Ship Console" icon={<ShipIcon />} question="Which crew is this ship?" />;
@@ -98,26 +97,14 @@ export function Ship() {
 
 function ActiveEva({ plan }: { plan: WorkPlan }) {
   const update = useUpdatePlan();
-  const route = plan.route!, done = Math.min(plan.progress_m ?? 0, route.distance_m);
-  const arrived = done >= route.distance_m - 1;
+  const set = (status: "done" | "assigned", msg: string) => update.mutate({ id: plan.id, patch: { status } }, { onSuccess: () => toast.success(msg) });
   return (
-    <div className="mx-3 mb-3 rounded-xl border border-live/30 bg-live/10 p-3">
-      <div className="flex items-center gap-2 text-xs font-medium text-live">
-        <span className="size-1.5 animate-pulse rounded-full bg-live" /> {arrived ? "Astronaut at the target" : "EVA in progress"}
-      </div>
-      <div className="mt-1 truncate font-medium">{plan.title}</div>
-      <Progress value={(done / (route.distance_m || 1)) * 100} className="mt-2 h-1.5 [&>div]:bg-live" />
-      <div className="mt-1.5 flex justify-between text-xs text-muted-foreground tabular-nums">
-        <span>{fmtKm(done)} of {fmtKm(route.distance_m)}</span>
-        <span>{fmtKm(route.distance_m - done)} to go</span>
-      </div>
+    <EvaCard plan={plan} className="mx-3 mb-3">
       <div className="mt-3 flex gap-2">
-        <Button size="sm" className="flex-1" disabled={update.isPending}
-          onClick={() => update.mutate({ id: plan.id, patch: { status: "done" } }, { onSuccess: () => toast.success("EVA complete") })}><CheckCircle2 /> Complete</Button>
-        <Button size="sm" variant="outline" disabled={update.isPending}
-          onClick={() => update.mutate({ id: plan.id, patch: { status: "assigned" } }, { onSuccess: () => toast("EVA stopped") })}><Square /> Stop</Button>
+        <Button size="sm" className="flex-1" disabled={update.isPending} onClick={() => set("done", "EVA complete")}><CheckCircle2 /> Complete</Button>
+        <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => set("assigned", "EVA stopped")}><Square /> Stop</Button>
       </div>
-    </div>
+    </EvaCard>
   );
 }
 
@@ -208,10 +195,7 @@ function ShipMap({ zone, hm, crew, home, plans, sel, active, start, draft, onPic
   zone: Zone; hm: Heightmap; crew: Crew; home: [number, number] | null; plans: WorkPlan[]; sel: WorkPlan | null; active: WorkPlan | undefined;
   start: Start | null; draft: PathResult | null; onPick: (lat: number, lon: number) => void; onSelect: (id: string) => void;
 }) {
-  const live = useMemo(() => {
-    if (!active?.route) return null;
-    return pointAt(active.route, alongs(active.route), active.progress_m ?? 0);
-  }, [active]);
+  const live = astronautAt(active);
 
   return (
     <>

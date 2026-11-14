@@ -1,12 +1,12 @@
 // MISSION CONTROL: the Mars globe with every crew on the surface; pick a crew to see and manage its
 // work plans in the side panel; "New crew" registers one.
 import { lazy, Suspense, useMemo, useState } from "react";
+import { Marker, Polyline } from "react-leaflet";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { Activity, Clock, ExternalLink, Globe2, MapPin, Pencil, Plus, Ship, Trash2, Users, X } from "lucide-react";
+import { Activity, ExternalLink, Globe2, MapPin, Pencil, Plus, Ship, Trash2, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
@@ -19,10 +19,11 @@ import { activePlan, useCrews, useDeleteCrew, useDeletePlan, usePlans } from "..
 import type { Crew, WorkPlan } from "../lib/types";
 import { crewHome, useHeightmap, useZone, useZones } from "../lib/zones";
 import { fmtDate, fmtKm, fmtLL } from "../lib/geo";
-import { Brand, ErrorNote, RouteStats, StatusBadge } from "../components/common";
-import { ZoneMap } from "../components/ZoneMap";
+import { Brand, ErrorNote, EvaCard, RouteStats, StatusBadge } from "../components/common";
+import { ZoneLeafletMap } from "../components/ZoneLeafletMap";
+import { DOT, LIVE_PIN, pin } from "../components/mapPins";
 import { NewCrewDialog, PlanDialog } from "../dispatch/dialogs";
-import { alongs, pointAt } from "../astro/checkpoints";
+import { astronautAt } from "../astro/checkpoints";
 
 const Globe = lazy(() => import("../dispatch/Globe").then((m) => ({ default: m.Globe })));
 
@@ -105,7 +106,7 @@ function CrewPanel({ crew, plans, onClose }: { crew: Crew; plans: WorkPlan[]; on
         <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close"><X /></Button>
       </div>
 
-      {active?.route && <ActiveEva plan={active} />}
+      {active?.route && <EvaCard plan={active} className="mx-4 mb-2" />}
 
       <div className="flex items-center justify-between px-4 pt-2 pb-2">
         <div className="text-xs font-medium tracking-wider text-muted-foreground uppercase">Work plans · {plans.length}</div>
@@ -153,22 +154,6 @@ function CrewPanel({ crew, plans, onClose }: { crew: Crew; plans: WorkPlan[]; on
   );
 }
 
-function ActiveEva({ plan }: { plan: WorkPlan }) {
-  const route = plan.route!, done = Math.min(plan.progress_m ?? 0, route.distance_m);
-  const pct = (done / (route.distance_m || 1)) * 100;
-  return (
-    <div className="mx-4 mb-2 rounded-xl border border-live/30 bg-live/10 p-3">
-      <div className="flex items-center gap-2 text-xs font-medium text-live"><span className="size-1.5 animate-pulse rounded-full bg-live" /> EVA in progress</div>
-      <div className="mt-1 truncate font-medium">{plan.title}</div>
-      <Progress value={pct} className="mt-2 h-1.5 [&>div]:bg-live" />
-      <div className="mt-1.5 flex justify-between text-xs text-muted-foreground tabular-nums">
-        <span>{fmtKm(done)} of {fmtKm(route.distance_m)}</span>
-        <span className="flex items-center gap-1"><Clock className="size-3" />since {fmtDate(plan.started_at)}</span>
-      </div>
-    </div>
-  );
-}
-
 function PlanItem({ plan, open, onToggle, onEdit }: { plan: WorkPlan; open: boolean; onToggle: () => void; onEdit: () => void }) {
   const del = useDeletePlan();
   return (
@@ -206,18 +191,18 @@ function PlanItem({ plan, open, onToggle, onEdit }: { plan: WorkPlan; open: bool
 
 function PlanDetails({ plan }: { plan: WorkPlan }) {
   const zone = useZone(plan.zone), hm = useHeightmap(zone);
-  const along = useMemo(() => (plan.route ? alongs(plan.route) : null), [plan.route]);
-  const you = plan.status === "in_progress" && plan.route && along ? pointAt(plan.route, along, plan.progress_m ?? 0) : null;
+  const you = astronautAt(plan);
   return (
     <div className="flex flex-col gap-3 border-t px-3 pt-3 pb-3">
       {plan.description && <p className="text-sm whitespace-pre-line text-muted-foreground">{plan.description}</p>}
-      <ZoneMap hm={hm.data}
-        routes={plan.route ? [{ points: plan.route.points, color: "#ffb347" }] : []}
-        markers={[
-          ...(plan.route ? [{ lat: plan.route.start.lat, lon: plan.route.start.lon, color: "#5ec4d6", label: "Start" }] : []),
-          { lat: plan.target_lat, lon: plan.target_lon, color: "#7be08a", label: "Target" },
-          ...(you ? [{ lat: you[0], lon: you[1], color: "#4fd1ff", label: "Astronaut" }] : []),
-        ]} />
+      {zone && (
+        <ZoneLeafletMap zone={zone} hm={hm.data} className="aspect-square rounded-xl border">
+          {plan.route && <Polyline positions={plan.route.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={{ color: "#ffb347", weight: 3 }} />}
+          {plan.route && <Marker position={[plan.route.start.lat, plan.route.start.lon]} icon={pin(`${DOT} bg-landing`, "", 12)} />}
+          <Marker position={[plan.target_lat, plan.target_lon]} icon={pin(`${DOT} bg-target`, "", 16)} />
+          {you && <Marker position={you} icon={pin(LIVE_PIN, "", 14)} zIndexOffset={1000} />}
+        </ZoneLeafletMap>
+      )}
       {plan.route ? <RouteStats route={plan.route} /> : <p className="text-xs text-muted-foreground">The ship hasn't made a route yet.</p>}
     </div>
   );

@@ -2,6 +2,7 @@
 // gets a fine, repeating regolith texture (sand grain, pebbles, small stones) multiplied over the
 // photo and faded out with distance: the usual "detail map" trick for terrain seen from eye level.
 import * as THREE from "three";
+import type { Closeup } from "./closeup";
 
 let cached: THREE.CanvasTexture | null = null;
 
@@ -61,16 +62,21 @@ export function detailTexture(): THREE.CanvasTexture {
 }
 
 /**
- * The close-up's material: photo × detail. The detail repeats every `period` metres (and at a
- * second scale, to hide the repetition) and fades out between `near` and `far` metres from the eye.
+ * The close-up's material. The HiRISE greyscale is coloured like scripts/build_zone_photos.py does
+ * (gamma 0.8, × Martian dust colour) and faded out at the edge of its circle; then multiplied by the
+ * detail texture, which repeats every `period` metres (and at a second scale, to hide the
+ * repetition) and fades out between `near` and `far` metres from the eye.
  */
-export function closeupMaterial(map: THREE.Texture, detail: THREE.Texture, maxAniso: number) {
+export function closeupMaterial(c: Closeup, detail: THREE.Texture, maxAniso: number) {
   detail.anisotropy = maxAniso;
+  c.texture.anisotropy = maxAniso;
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
     uniforms: {
-      map: { value: map },
+      map: { value: c.texture },
+      fadeCenter: { value: c.fade.center },
+      fadeScale: { value: c.fade.scale },
       detail: { value: detail },
       period: { value: 3.0 },
       near: { value: 8.0 },
@@ -89,10 +95,15 @@ export function closeupMaterial(map: THREE.Texture, detail: THREE.Texture, maxAn
       uniform sampler2D map;
       uniform sampler2D detail;
       uniform float period, near, far;
+      uniform vec2 fadeCenter, fadeScale;
+      const vec3 DUST = vec3(1.36, 0.94, 0.66);
       varying vec2 vUv;
       varying vec3 vWorld;
       void main() {
-        vec4 photo = texture2D(map, vUv);
+        vec4 tex = texture2D(map, vUv);
+        vec3 srgb = min(pow(tex.r, 0.8) * DUST, 1.0);
+        float edge = 1.0 - smoothstep(0.7, 1.0, length((vUv - fadeCenter) * fadeScale));
+        vec4 photo = vec4(sRGBTransferEOTF(vec4(srgb, 1.0)).rgb, tex.a * edge);
         float d1 = texture2D(detail, vWorld.xz / period).r;
         float d2 = texture2D(detail, vWorld.xz / (period * 7.3) + 0.37).r;
         float k = (d1 * 0.65 + d2 * 0.35) / 0.502;          // ~1 on average

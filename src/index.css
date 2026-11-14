@@ -148,5 +148,3 @@ body { overflow: hidden; }
 .leaflet-bar a { background: var(--card) !important; color: var(--foreground) !important; border-color: var(--border) !important; }
 .map-pin { display: grid; place-items: center; }
 
-/* CTX and HiRISE are greyscale: tint them to Martian dust */
-.mars-tint img { filter: sepia(1) saturate(1.7) hue-rotate(-14deg) brightness(0.92) contrast(1.08); }

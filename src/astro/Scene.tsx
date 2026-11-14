@@ -2,19 +2,22 @@
 // you stand on the surface 1:1 at your last checkpoint, facing the next one; the route is a glowing
 // line on the ground with beacons ahead; a relief mini-map floats below your gaze and a status
 // panel just under eye level. Everything follows the active work plan and your progress.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { OrbitControls, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import type { Heightmap } from "../lib/zones";
 import type { Route, WorkPlan } from "../lib/types";
-import { labelTexture, localOf, terrainGeometry } from "./geometry";
+import { labelTexture, localOf, patchGeometry, terrainGeometry } from "./geometry";
+import { useCloseup } from "./closeup";
+import { closeupMaterial, detailTexture } from "./detail";
 import { alongs, checkpointAt, checkpoints, legInfo, pointAt, type Checkpoint } from "./checkpoints";
 import { compass, fmtDur, fmtKm } from "../lib/geo";
 
 const ROUTE = new THREE.Color("#ffb347");
 const SKY = "#c9946a";
 const MINI_SIZE = 0.42; // m, the mini-map's width
+const LITE = new URLSearchParams(location.search).has("lite");
 
 export interface SceneProps {
   hm: Heightmap;
@@ -33,6 +36,10 @@ export function Scene(props: SceneProps) {
       onCreated={({ gl }) => {
         gl.xr.enabled = true;
         gl.xr.setReferenceSpaceType("local-floor");
+        // sharpness: three's default foveation (1) renders the edges of the view at low resolution;
+        // ?lite in the address goes back to the cheaper settings if the headset drops frames
+        gl.xr.setFoveation(LITE ? 1 : 0);
+        gl.xr.setFramebufferScaleFactor(LITE ? 1 : 1.2);
         props.onGl(gl);
       }}>
       <color attach="background" args={[SKY]} />
@@ -48,7 +55,7 @@ function World({ hm, home, plan, progress, onXr }: SceneProps) {
   const along = useMemo(() => (route ? alongs(route) : []), [route]);
   const step = route ? checkpointAt(cps, progress) : 0;
   const M = useSurfaceMatrix(hm, home, route, cps, step);
-  const geo = useMemo(() => terrainGeometry(hm), [hm]);
+  const geo = useMemo(() => terrainGeometry(hm, LITE ? 2 : 1), [hm]);
   const t = useMemo(() => { const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3(); M.decompose(p, q, s); return { p, q, s }; }, [M]);
   const gl = useThree((s) => s.gl);
   const [presenting, setPresenting] = useState(false);
@@ -63,15 +70,15 @@ function World({ hm, home, plan, progress, onXr }: SceneProps) {
   }, [gl, onXr]);
 
   const you = route ? pointAt(route, along, progress) : home;
+  const here: [number, number] = route ? [route.points[cps[step].i][0], route.points[cps[step].i][1]] : home;
 
   return (
     <>
-      <mesh geometry={geo} position={t.p} quaternion={t.q} scale={t.s}>
-        <meshBasicMaterial vertexColors />
-      </mesh>
+      <Terrain hm={hm} geo={geo} t={t} offset />
+      <Closeup hm={hm} at={here} t={t} />
       {route && <RouteLine hm={hm} route={route} M={M} />}
       {route && <Beacons hm={hm} route={route} cps={cps} M={M} step={step} />}
-      <FollowGaze distance={0.8} drop={0.33} tilt={-0.95}>
+      <FollowGaze distance={0.8} drop={0.33} tilt={0.95}>
         <MiniMap hm={hm} route={route} you={you} home={home} />
       </FollowGaze>
       {presenting && (
@@ -82,6 +89,45 @@ function World({ hm, home, plan, progress, onXr }: SceneProps) {
       {!presenting && <LookAround step={step} />}
     </>
   );
+}
+
+type Placement = { p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3 };
+
+/** the zone's terrain with its orbital photo (elevation colours until the photo has loaded) */
+function Terrain({ hm, geo, t, offset = false }: { hm: Heightmap; geo: THREE.BufferGeometry; t: Placement; offset?: boolean }) {
+  const fallback = (
+    <mesh geometry={geo} position={t.p} quaternion={t.q} scale={t.s}>
+      <meshBasicMaterial vertexColors />
+    </mesh>
+  );
+  return <Suspense fallback={fallback}><PhotoTerrain hm={hm} geo={geo} t={t} offset={offset} /></Suspense>;
+}
+
+function PhotoTerrain({ hm, geo, t, offset }: { hm: Heightmap; geo: THREE.BufferGeometry; t: Placement; offset: boolean }) {
+  const gl = useThree((s) => s.gl);
+  const map = useTexture(`/zones/${hm.zone.id}-photo.jpg`, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = gl.capabilities.getMaxAnisotropy(); // keeps the ground sharp towards the horizon
+  });
+  return (
+    <mesh geometry={geo} position={t.p} quaternion={t.q} scale={t.s}>
+      {/* pushed back a little so the close-up (same vertices) wins the depth test */}
+      <meshBasicMaterial map={map} polygonOffset={offset} polygonOffsetFactor={1} polygonOffsetUnits={2} />
+    </mesh>
+  );
+}
+
+/** the HiRISE close-up around where you stand, laid on the same terrain */
+function Closeup({ hm, at, t }: { hm: Heightmap; at: [number, number]; t: Placement }) {
+  const gl = useThree((s) => s.gl);
+  const c = useCloseup(hm.zone.id, at[0], at[1]);
+  const geo = useMemo(() => (c ? patchGeometry(hm, c.bounds) : null), [hm, c]);
+  useEffect(() => () => geo?.dispose(), [geo]);
+  useEffect(() => { if (c) { c.texture.anisotropy = gl.capabilities.getMaxAnisotropy(); c.texture.needsUpdate = true; } }, [c, gl]);
+  const mat = useMemo(() => (c ? closeupMaterial(c.texture, detailTexture(), gl.capabilities.getMaxAnisotropy()) : null), [c, gl]);
+  useEffect(() => () => mat?.dispose(), [mat]);
+  if (!c || !geo || !mat) return null;
+  return <mesh geometry={geo} material={mat} position={t.p} quaternion={t.q} scale={t.s} renderOrder={1} />;
 }
 
 /** the terrain frame placed so you stand at checkpoint `step`, facing the next one (or north on standby) */
@@ -150,7 +196,7 @@ function Beacons({ hm, route, cps, M, step }: { hm: Heightmap; route: Route; cps
   );
 }
 
-/** keeps its children in front of you (turning with your head, not tilting), `drop` m below eye level */
+/** keeps its children in front of you (turning with your head, not tilting), `drop` m below eye level, top tilted `tilt` rad towards you */
 function FollowGaze({ distance, drop, tilt, children }: { distance: number; drop: number; tilt: number; children: React.ReactNode }) {
   const ref = useRef<THREE.Group>(null);
   const gl = useThree((s) => s.gl), camera = useThree((s) => s.camera);
@@ -184,7 +230,7 @@ function MiniMap({ hm, route, you, home }: { hm: Heightmap; route: Route | null;
   const z = hm.zone;
   const s = MINI_SIZE / (z.width * z.dx);
   // local terrain frame → mini-map: centred, scaled, heights exaggerated ×2
-  const M = useMemo(() => new THREE.Matrix4().makeScale(s, s * 2, s).multiply(new THREE.Matrix4().makeTranslation(0, -(z.max - z.min) / 2, 0)), [s, z.max, z.min]);
+  const M = useMemo(() => new THREE.Matrix4().makeScale(s, s * 2, s), [s]); // terrain sits on the board
   const geo = useMemo(() => terrainGeometry(hm, 4), [hm]);
   const t = useMemo(() => { const p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3(); M.decompose(p, q, sc); return { p, q, sc }; }, [M]);
   const line = useMemo(() => (route ? tube(hm, route, M, 8, 0.0025) : null), [hm, route, M]);
@@ -201,9 +247,7 @@ function MiniMap({ hm, route, you, home }: { hm: Heightmap; route: Route | null;
         <boxGeometry args={[MINI_SIZE + 0.03, 0.008, MINI_SIZE + 0.03]} />
         <meshBasicMaterial color="#1a1410" transparent opacity={0.85} />
       </mesh>
-      <mesh geometry={geo} position={t.p} quaternion={t.q} scale={t.sc}>
-        <meshBasicMaterial vertexColors />
-      </mesh>
+      <Terrain hm={hm} geo={geo} t={{ p: t.p, q: t.q, s: t.sc }} />
       {line && <mesh geometry={line}><meshBasicMaterial color={ROUTE} /></mesh>}
       <mesh position={homeAt.clone().add(new THREE.Vector3(0, 0.006, 0))}>
         <sphereGeometry args={[0.004, 12, 8]} />
@@ -303,5 +347,5 @@ function LookAround({ step }: { step: number }) {
   const camera = useThree((s) => s.camera);
   useEffect(() => { camera.position.set(0, 1.7, 0); }, [camera, step]);
   // orbit a point 1 cm ahead, reversed so dragging feels like turning your head
-  return <OrbitControls key={step} target={[0, 1.69, -0.01]} enableZoom={false} enablePan={false} rotateSpeed={-0.35} />;
+  return <OrbitControls key={step} target={[0, 1.7, -0.01]} enableZoom={false} enablePan={false} rotateSpeed={-0.35} />;
 }

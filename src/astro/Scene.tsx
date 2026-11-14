@@ -105,17 +105,17 @@ function World({ hm, home, plan, progress, cond, alerts, hazards, onXr }: SceneP
   );
 }
 
-type Placement = { p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3 };
+export type Placement = { p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3 };
 
 /** a transform as position / rotation / scale props */
-function placement(M: THREE.Matrix4): Placement {
+export function placement(M: THREE.Matrix4): Placement {
   const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
   M.decompose(p, q, s);
   return { p, q, s };
 }
 
 /** the zone's terrain with its orbital photo (plain Mars colour for the moment it loads) */
-function Terrain({ hm, geo, t, offset = false }: { hm: Heightmap; geo: THREE.BufferGeometry; t: Placement; offset?: boolean }) {
+export function Terrain({ hm, geo, t, offset = false }: { hm: Heightmap; geo: THREE.BufferGeometry; t: Placement; offset?: boolean }) {
   const fallback = (
     <mesh geometry={geo} position={t.p} quaternion={t.q} scale={t.s}>
       <meshBasicMaterial color="#a8724a" />
@@ -139,7 +139,7 @@ function PhotoTerrain({ hm, geo, t, offset }: { hm: Heightmap; geo: THREE.Buffer
 }
 
 /** the HiRISE close-up around where you stand, laid on the same terrain */
-function Closeup({ hm, at, t }: { hm: Heightmap; at: [number, number]; t: Placement }) {
+export function Closeup({ hm, at, t }: { hm: Heightmap; at: [number, number]; t: Placement }) {
   const gl = useThree((s) => s.gl);
   const c = useCloseup(hm.zone.id, at[0], at[1]);
   const geo = useMemo(() => (c ? patchGeometry(hm, c.bounds) : null), [hm, c]);
@@ -180,7 +180,7 @@ function RouteLine({ hm, route, M }: { hm: Heightmap; route: Route; M: THREE.Mat
   );
 }
 
-function tube(hm: Heightmap, route: Route, M: THREE.Matrix4, lift: number, radius: number) {
+export function tube(hm: Heightmap, route: Route, M: THREE.Matrix4, lift: number, radius: number) {
   const pts = route.points.map(([lat, lon]) => localOf(hm, lat, lon, lift).applyMatrix4(M));
   if (pts.length < 2) pts.push(pts[0].clone().add(new THREE.Vector3(0, 0.001, 0)));
   const curve = new THREE.CatmullRomCurve3(pts, false, "centripetal");
@@ -217,7 +217,7 @@ function Beacons({ hm, route, cps, M, step }: { hm: Heightmap; route: Route; cps
 }
 
 /** each anomaly area as a tall translucent column standing on the ground, edged in its alert colour */
-function HazardColumns({ hm, hazards, M }: { hm: Heightmap; hazards: MarsEvent[]; M: THREE.Matrix4 }) {
+export function HazardColumns({ hm, hazards, M }: { hm: Heightmap; hazards: MarsEvent[]; M: THREE.Matrix4 }) {
   const items = useMemo(() => hazards.map((e) => ({ e, at: localOf(hm, e.lat!, e.lon!).applyMatrix4(M) })), [hm, hazards, M]);
   return (
     <>

@@ -6,20 +6,23 @@ import { useParams } from "react-router";
 import { toast } from "sonner";
 import { Marker, Polyline, Tooltip, ZoomControl } from "react-leaflet";
 import { ZoneLeafletMap } from "../components/ZoneLeafletMap";
-import { DOT, LIVE_PIN, pin } from "../components/mapPins";
-import { CheckCircle2, Crosshair, Flag, Loader2, Megaphone, Play, Route as RouteIcon, Send, Ship as ShipIcon, Square, Waypoints, X } from "lucide-react";
+import { DOT, pin } from "../components/mapPins";
+import { AstronautLayer } from "../components/AstronautLayer";
+import { useAstronaut, type AstronautView } from "../lib/astronaut";
+import { returnRoute } from "../lib/recall";
+import { CheckCircle2, Crosshair, Flag, House, Loader2, Megaphone, Play, Route as RouteIcon, Send, Ship as ShipIcon, Square, Waypoints, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
 import { activePlan, useCrew, useEvents, usePlans, useStartEva, useUpdateEvent, useUpdatePlan } from "../lib/queries";
-import type { Crew, MarsEvent, Route, WorkPlan } from "../lib/types";
+import { isReturn, type Crew, type MarsEvent, type Route, type WorkPlan } from "../lib/types";
 import { crewHome, inZone, useHeightmap, useZone, type Heightmap, type Zone } from "../lib/zones";
 import { generateRoute } from "../lib/routing";
 import type { PathResult } from "../lib/pathfind";
 import { fmtDate, fmtKm, fmtLL } from "../lib/geo";
-import { alongs, astronautAt } from "../astro/checkpoints";
+import { alongs } from "../astro/checkpoints";
 import { Brand, CrewPicker, ErrorNote, EvaCard, RouteStats, StatusBadge } from "../components/common";
 import { AlertList, ConditionsGrid, EvaCheckView, HazardAreas, OutlookBar } from "../components/alerts";
 import { EventDialog } from "../components/EventDialog";
@@ -53,8 +56,8 @@ export function Ship() {
   const evs = useMemo(() => events.data ?? [], [events.data]);
   const ack = useUpdateEvent();
   const [raising, setRaising] = useState(false);
-  const live = astronautAt(active);
-  const alerts = crew ? crewAlerts(crew, zone, active, evs, now, live) : [];
+  const astro = useAstronaut(crewId, active);
+  const alerts = crew ? crewAlerts(crew, zone, active, evs, now, astro.at) : [];
   const cond = zone ? conditions(zone, now, evs) : null;
   const avoid = zone ? avoidList(areaHazards(evs, zone.id, now, now + AVOID_AHEAD_H * 3600_000)) : [];
   const env: Env = { evs, now, avoid };
@@ -78,7 +81,7 @@ export function Ship() {
             <Button size="sm" variant="outline" disabled={!crew} onClick={() => setRaising(true)}><Megaphone /> Alert the helmet / mark a hazard</Button>
             <ErrorNote error={events.error} />
           </div>
-          {active?.route && <ActiveEva plan={active} hm={hm.data} env={env} />}
+          {active?.route && <ActiveEva plan={active} hm={hm.data} env={env} astro={astro} home={home} />}
           <Separator />
           <div className="px-4 pt-3 pb-2 text-xs font-medium tracking-wider text-muted-foreground uppercase">Work plans from mission control</div>
           <ErrorNote error={plans.error} />
@@ -105,7 +108,7 @@ export function Ship() {
 
       <main className="relative isolate min-w-0 flex-1 max-md:hidden">
         {zone && hm.data && crew ? (
-          <ShipMap zone={zone} hm={hm.data} crew={crew} home={home} plans={plans.data ?? []} sel={sel} active={active} env={env}
+          <ShipMap zone={zone} hm={hm.data} crew={crew} home={home} plans={plans.data ?? []} sel={sel} active={active} env={env} astro={astro}
             start={sel ? startOf(sel) : null} draft={sel ? drafts[sel.id] ?? null : null}
             onPick={(lat, lon) => {
               if (!sel || !inZone(zone, lat, lon)) return;
@@ -130,28 +133,41 @@ function onRoute(plan: WorkPlan, zoneId: string, env: Env) {
   return areaHazards(env.evs, zoneId, env.now).filter((e) => e.level !== "info" && routeHit(plan.route!, along, e, plan.progress_m ?? 0) != null);
 }
 
-function ActiveEva({ plan, hm, env }: { plan: WorkPlan; hm: Heightmap | undefined; env: Env }) {
+function ActiveEva({ plan, hm, env, astro, home }: { plan: WorkPlan; hm: Heightmap | undefined; env: Env; astro: AstronautView; home: [number, number] | null }) {
   const update = useUpdatePlan();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const set = (status: "done" | "assigned", msg: string) => update.mutate({ id: plan.id, patch: { status } }, { onSuccess: () => toast.success(msg) });
   const blocking = onRoute(plan, plan.zone, env);
 
-  /** a new route from where the astronaut is now, around the anomalies; the helmet switches to it */
+  const back = isReturn(plan.route);
+  /** a new route from where the astronaut is now, around the anomalies (back to base when returning); the helmet switches to it */
   async function reroute() {
-    const here = astronautAt(plan);
-    if (!hm || !here) return;
+    const here = astro.at;
+    if (!hm || !here || (back && !home)) return;
     setBusy(true); setErr(null);
     try {
-      const r = await generateRoute(hm, here, [plan.target_lat, plan.target_lon], env.avoid);
-      const route: Route = { ...r, start: { lat: here[0], lon: here[1], name: "Rerouted here" }, target: { lat: plan.target_lat, lon: plan.target_lon }, generated_at: new Date().toISOString() };
+      const route: Route = back
+        ? await returnRoute(hm, here, home!, env.avoid, plan.route?.reason ?? "Recall")
+        : { ...(await generateRoute(hm, here, [plan.target_lat, plan.target_lon], env.avoid)), start: { lat: here[0], lon: here[1], name: "Rerouted here" }, target: { lat: plan.target_lat, lon: plan.target_lon }, generated_at: new Date().toISOString() };
       await update.mutateAsync({ id: plan.id, patch: { route, progress_m: 0 } });
       toast.success("New route sent to the helmet");
     } catch (e) { setErr(e); } finally { setBusy(false); }
   }
+  /** abort the EVA: a route back to base from where the astronaut is; the helmet raises the alarm */
+  async function recall() {
+    const here = astro.at;
+    if (!hm || !here || !home) return;
+    setBusy(true); setErr(null);
+    try {
+      const route = await returnRoute(hm, here, home, env.avoid, "Recalled by the ship");
+      await update.mutateAsync({ id: plan.id, patch: { route, progress_m: 0 } });
+      toast.success("Recall sent: the astronaut is returning to base");
+    } catch (e) { setErr(e); } finally { setBusy(false); }
+  }
 
   return (
-    <EvaCard plan={plan} className="mx-3 mb-3">
+    <EvaCard plan={plan} astro={astro} className="mx-3 mb-3">
       {blocking.length > 0 && (
         <div className="mt-3 rounded-lg border border-red-500/50 bg-red-500/15 p-2 text-xs text-red-200">
           <b>{blocking.map(eventLabel).join(", ")}</b> across the route ahead.
@@ -161,6 +177,11 @@ function ActiveEva({ plan, hm, env }: { plan: WorkPlan; hm: Heightmap | undefine
         </div>
       )}
       <ErrorNote error={err} />
+      {!back && (
+        <Button size="sm" variant="destructive" className="mt-3 w-full" disabled={busy || !hm || !astro.at || !home} onClick={recall}>
+          {busy ? <Loader2 className="animate-spin" /> : <House />} Recall to base
+        </Button>
+      )}
       <div className="mt-3 flex gap-2">
         <Button size="sm" className="flex-1" disabled={update.isPending} onClick={() => set("done", "EVA complete")}><CheckCircle2 /> Complete</Button>
         <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => set("assigned", "EVA stopped")}><Square /> Stop</Button>
@@ -177,7 +198,9 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const saved = plan.route;
-  const stale = !!saved && (saved.target.lat !== plan.target_lat || saved.target.lon !== plan.target_lon);
+  // a return route on a plan that is no longer active: the EVA was recalled, the plan needs a new route
+  const recalled = !!saved && isReturn(saved) && plan.status !== "in_progress";
+  const stale = recalled || (!!saved && !isReturn(saved) && (saved.target.lat !== plan.target_lat || saved.target.lon !== plan.target_lon));
   const pending = selected && !!saved && !stale && plan.status !== "in_progress" && plan.status !== "done";
   const { evs, now } = env;
   const check = useMemo(() => (pending && zone && saved ? evaCheck(zone, saved, evs, now) : null), [pending, zone, saved, evs, now]);
@@ -240,7 +263,7 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
           {saved && !draft && (
             <div className="flex flex-col gap-2">
               <div className="text-xs font-medium text-muted-foreground">In the helmet since {fmtDate(saved.generated_at)}</div>
-              {stale && <div className="rounded-lg bg-primary/10 px-2.5 py-1.5 text-xs text-primary">Mission control moved the target: make a new route.</div>}
+              {stale && <div className="rounded-lg bg-primary/10 px-2.5 py-1.5 text-xs text-primary">{recalled ? `The EVA was recalled (${saved.reason ?? "hazard"}): make a new route.` : "Mission control moved the target: make a new route."}</div>}
               {crossed.length > 0 && <div className="rounded-lg bg-red-500/15 px-2.5 py-1.5 text-xs text-red-200">{crossed.map(eventLabel).join(", ")} now across this route: make a new route.</div>}
               <RouteStats route={saved} />
             </div>
@@ -261,12 +284,10 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
 }
 
 // ------------------------------------------------------------------------------------------------
-function ShipMap({ zone, hm, crew, home, plans, sel, active, env, start, draft, onPick, onSelect }: {
-  zone: Zone; hm: Heightmap; crew: Crew; home: [number, number] | null; plans: WorkPlan[]; sel: WorkPlan | null; active: WorkPlan | undefined; env: Env;
+function ShipMap({ zone, hm, crew, home, plans, sel, active, env, astro, start, draft, onPick, onSelect }: {
+  zone: Zone; hm: Heightmap; crew: Crew; home: [number, number] | null; plans: WorkPlan[]; sel: WorkPlan | null; active: WorkPlan | undefined; env: Env; astro: AstronautView;
   start: Start | null; draft: PathResult | null; onPick: (lat: number, lon: number) => void; onSelect: (id: string) => void;
 }) {
-  const live = astronautAt(active);
-
   return (
     <>
       <ZoneLeafletMap key={crew.id} zone={zone} hm={hm} onPick={onPick} className="size-full">
@@ -286,11 +307,11 @@ function ShipMap({ zone, hm, crew, home, plans, sel, active, env, start, draft, 
         ))}
 
         {active?.route && active.id !== sel?.id && (
-          <Polyline positions={active.route.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={{ color: "#4fd1ff", weight: 3, opacity: 0.6 }} />
+          <Polyline positions={active.route.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={isReturn(active.route) ? { color: "#5fd8ff", weight: 5, opacity: 0.95, dashArray: "10 6" } : { color: "#4fd1ff", weight: 3, opacity: 0.6 }} />
         )}
         {sel?.route && (
           <Polyline positions={sel.route.points.map(([a, b]) => [a, b] as [number, number])}
-            pathOptions={{ color: "#ffb347", weight: 4, opacity: draft ? 0.35 : 1, dashArray: sel.route.target.lat !== sel.target_lat ? "6 8" : undefined }} />
+            pathOptions={isReturn(sel.route) ? { color: "#5fd8ff", weight: 5, opacity: draft ? 0.35 : 0.95, dashArray: "10 6" } : { color: "#ffb347", weight: 4, opacity: draft ? 0.35 : 1, dashArray: sel.route.target.lat !== sel.target_lat ? "6 8" : undefined }} />
         )}
         {draft && <Polyline positions={draft.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={{ color: "#4fd1ff", weight: 4, dashArray: "8 6" }} />}
         {sel && start && (
@@ -298,12 +319,7 @@ function ShipMap({ zone, hm, crew, home, plans, sel, active, env, start, draft, 
             <Tooltip direction="top" offset={[0, -8]}>Start · {start.name}</Tooltip>
           </Marker>
         )}
-        {live && (
-          <Marker position={live} zIndexOffset={1000}
-            icon={pin(LIVE_PIN, "", 16)}>
-            <Tooltip direction="top" offset={[0, -10]} permanent>Astronaut</Tooltip>
-          </Marker>
-        )}
+        <AstronautLayer a={astro} label={crew.name} />
         <ZoomControl position="bottomright" />
       </ZoneLeafletMap>
 
@@ -315,6 +331,8 @@ function ShipMap({ zone, hm, crew, home, plans, sel, active, env, start, draft, 
         <Legend cls="bg-route" label="Work plan target" />
         <Legend cls="bg-live" label="Astronaut (live)" />
         <div className="flex items-center gap-2"><span className="h-0.5 w-4 bg-route" />Route in the helmet</div>
+        <div className="flex items-center gap-2"><span className="h-0.5 w-4 border-t-2 border-dashed border-sky-400" />Return to base</div>
+        <div className="flex items-center gap-2"><span className="h-0.5 w-4 border-t-2 border-dotted border-live" />Walked (live)</div>
         <div className="flex items-center gap-2"><span className="h-0.5 w-4 border-t-2 border-dashed border-live" />New route, not sent</div>
         <div className="flex items-center gap-2"><span className="size-2.5 rounded-full border-2 border-amber-400 bg-amber-400/30" />Anomaly (dashed: forecast)</div>
       </div>

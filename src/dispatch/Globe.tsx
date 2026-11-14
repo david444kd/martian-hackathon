@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, OrbitControls, Stars, useTexture } from "@react-three/drei";
 import * as THREE from "three";
-import type { Level } from "../lib/types";
+import type { EventKind, Level } from "../lib/types";
+import { drawStorm, seedOf } from "../lib/stormArt";
 import { LEVEL_COLOR } from "../components/levels";
 
 interface GlobeCrew { id: string; name: string; lat: number; lon: number; active: boolean; alert: Level | null }
-interface GlobeHazard { id: string; lat: number; lon: number; level: Level; label: string; active: boolean }
+interface GlobeHazard { id: string; kind: EventKind; lat: number; lon: number; level: Level; label: string; active: boolean }
 
 interface Props {
   crews: GlobeCrew[];
@@ -91,10 +92,23 @@ function HazardMark({ h, label: text }: { h: GlobeHazard; label: string | null }
   const ring = useRef<THREE.Mesh>(null), label = useRef<HTMLDivElement>(null);
   const tmp = useMemo(() => new THREE.Vector3(), []);
   const color = LEVEL_COLOR[h.level];
+  // the anomaly's picture (lib/stormArt.ts) on a small canvas texture, redrawn as it churns
+  const art = useMemo(() => {
+    const canvas = document.createElement("canvas"); canvas.width = canvas.height = 160;
+    const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
+    return { canvas, tex, ctx: canvas.getContext("2d")!, seed: seedOf(h.id), last: -1 };
+  }, [h.id]);
+  useEffect(() => () => art.tex.dispose(), [art]);
   useFrame(({ clock, camera }) => {
+    if (clock.elapsedTime - art.last > 0.05) {
+      art.last = clock.elapsedTime;
+      art.ctx.clearRect(0, 0, 160, 160);
+      drawStorm(art.ctx, 80, 80, 58, clock.elapsedTime, { kind: h.kind, level: h.level, active: h.active, seed: art.seed });
+      art.tex.needsUpdate = true;
+    }
     if (ring.current) {
       const t = (clock.elapsedTime * 0.6) % 1;
-      ring.current.scale.setScalar(1 + t * 1.6);
+      ring.current.scale.setScalar(1 + t * 0.9);
       (ring.current.material as THREE.MeshBasicMaterial).opacity = (1 - t) * (h.active ? 0.9 : 0.35);
     }
     if (label.current) { tmp.copy(camera.position).sub(pos); label.current.style.opacity = tmp.dot(pos) > 0 ? "1" : "0"; }
@@ -102,11 +116,11 @@ function HazardMark({ h, label: text }: { h: GlobeHazard; label: string | null }
   return (
     <group position={pos} quaternion={quat}>
       <mesh>
-        <circleGeometry args={[0.032, 40]} />
-        <meshBasicMaterial color={color} transparent opacity={h.active ? 0.35 : 0.12} depthWrite={false} />
+        <circleGeometry args={[0.062, 48]} />
+        <meshBasicMaterial map={art.tex} transparent depthWrite={false} toneMapped={false} />
       </mesh>
       <mesh ref={ring} position={[0, 0, 0.0005]}>
-        <ringGeometry args={[0.03, 0.034, 48]} />
+        <ringGeometry args={[0.044, 0.047, 48]} />
         <meshBasicMaterial color={color} transparent depthWrite={false} />
       </mesh>
       {text && (

@@ -20,6 +20,8 @@ interface Db {
   createPlan(p: NewPlan): Promise<WorkPlan>;
   updatePlan(id: string, patch: PlanPatch): Promise<WorkPlan>;
   deletePlan(id: string): Promise<void>;
+  /** helmet: progress along the route, only if the plan still has that route and is still active */
+  reportProgress(id: string, routeStamp: string, progress_m: number): Promise<void>;
   listEvents(): Promise<MarsEvent[]>;
   createEvent(e: NewEvent): Promise<MarsEvent>;
   updateEvent(id: string, patch: EventPatch): Promise<MarsEvent>;
@@ -50,6 +52,9 @@ function supabaseDb(sb: SupabaseClient): Db {
     createPlan: async (p) => ok(await sb.from("work_plans").insert(p).select().single()),
     updatePlan: async (id, patch) => ok(await sb.from("work_plans").update(patch).eq("id", id).select().single()),
     deletePlan: async (id) => { ok(await sb.from("work_plans").delete().eq("id", id)); },
+    reportProgress: async (id, stamp, progress_m) => {
+      ok(await sb.from("work_plans").update({ progress_m }).eq("id", id).eq("status", "in_progress").eq("route->>generated_at", stamp));
+    },
     listEvents: async () => {
       const since = new Date(Date.now() - EVENT_HISTORY_MS).toISOString();
       return ok(await sb.from("events").select("*").or(`ends_at.is.null,ends_at.gt.${since}`).order("starts_at"));

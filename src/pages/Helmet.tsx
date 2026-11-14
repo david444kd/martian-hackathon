@@ -1,30 +1,31 @@
-// EVA HELMET: shows the crew's active work plan (the one the ship started) by itself; no input
-// needed beyond entering VR once. The walk along the route is simulated (the helmet has no real
-// positioning) and reported back as telemetry, so the ship and mission control see the astronaut move.
-// Alerts (anomalies, forecasts, messages) appear at eye level and are read out loud: hands-free.
+// EVA HELMET: the astronaut's view, on a screen or in a Meta Quest. You stand on the crew's zone
+// (measured terrain, 1:1) inside a suit: walk freely, follow the route the ship sent (projected on
+// the ground), and get the calls and warnings from mission control and the ship with sound and voice.
+// Every 2.5 s the helmet reports where you are (position, heading, speed, suit values) so mission
+// control and the ship see you move. When a hazard (a dust storm, a rockfall, a solar particle event)
+// reaches your route, the EVA is aborted: alarm, RETURN TO BASE, and a new route back to the base.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams } from "react-router";
 import type * as THREE from "three";
-import { Glasses, HardHat, Radio } from "lucide-react";
+import { Glasses, HardHat, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { activePlan, useCrew, useCrews, useEvents, usePlans, useReportProgress } from "../lib/queries";
-import type { WorkPlan } from "../lib/types";
-import { areaHazards, crewAlerts, type Alert } from "../lib/hazards";
-import { conditions, fmtLmst, useNow } from "../lib/mars";
-import { astronautAt } from "../astro/checkpoints";
-import { AlertList } from "../components/alerts";
+import { activePlan, useCrew, useCrews, useEvents, usePlans } from "../lib/queries";
 import { crewHome, useHeightmap, useZone } from "../lib/zones";
-import { fmtDur, fmtKm } from "../lib/geo";
-import { Brand, CrewPicker, ErrorNote } from "../components/common";
+import { useNow } from "../lib/mars";
+import { CrewPicker, ErrorNote } from "../components/common";
 import { load, save } from "../lib/storage";
+import { EvaRuntime } from "../eva/runtime";
+import { SuitAudio } from "../eva/audio";
+import { SuitModel } from "../eva/suit";
+import { useEva, type EvaView } from "../eva/useEva";
+import { EvaHud } from "../eva/EvaHud";
+import { toLocal } from "../eva/frame";
 
-const Scene = lazy(() => import("../astro/Scene").then((m) => ({ default: m.Scene })));
+const EvaScene = lazy(() => import("../eva/EvaScene").then((m) => ({ default: m.EvaScene })));
 
 const LAST_CREW = "mars-ops.helmet.crew";
-/** how much faster than real walking the simulated EVA goes (?speed=1 for real time) */
-const SPEED = Number(new URLSearchParams(location.search).get("speed")) || 30;
-const REPORT_MS = 10_000; // every report reaches every open page through realtime
+/** autopilot pace over a suited walk (?speed=1 is real walking pace) */
+const SPEED = Number(new URLSearchParams(location.search).get("speed")) || 8;
 
 export function HelmetPicker() {
   const last = load<string | null>(LAST_CREW, null);
@@ -39,160 +40,89 @@ export function Helmet() {
   const crewQ = useCrew(crewId), plans = usePlans(crewId);
   const crew = crewQ.data ?? undefined;
   const zone = useZone(crew?.zone), hm = useHeightmap(zone);
-  const home = crew ? crewHome(crew, zone) : null;
-  const active = activePlan(plans.data), plan = active?.route ? active : null; // an EVA with a route to follow
-  const progress = useSimulatedWalk(plan);
-
-  const events = useEvents(), now = useNow(5000);
+  const home = useMemo(() => (crew ? crewHome(crew, zone) : null), [crew, zone]);
+  const active = activePlan(plans.data), plan = active?.route ? active : null;
+  const events = useEvents(), now = useNow(1000);
   const evs = useMemo(() => events.data ?? [], [events.data]);
-  const at = plan ? astronautAt({ ...plan, progress_m: progress }) : home;
-  const alerts = crew ? crewAlerts(crew, zone, plan, evs, now, at) : [];
-  const cond = zone ? conditions(zone, now, evs) : null;
-  const hazards = useMemo(() => (zone ? areaHazards(evs, zone.id, now) : []), [evs, zone, now]);
-  const speak = useAlertVoice(alerts);
 
-  const [session, setSession] = useState<XRSession | null>(null);
+  const rt = useMemo(() => { const r = new EvaRuntime(); r.autoSpeed = SPEED; return r; }, []);
+  const audio = useMemo(() => new SuitAudio(), []);
+  const suit = useMemo(() => new SuitModel(crewId ?? "none"), [crewId]);
+  useEffect(() => () => audio.dispose(), [audio]);
+  const [muted, setMuted] = useState(false);
+  const [begun, setBegun] = useState(false);
+
+  const v = useEva({ crew, zone, hm: hm.data, home, plan, evs, now, rt, audio, suit });
+  const viewRef = useRef<EvaView | null>(null);
+  viewRef.current = v;
+
+  // the HiRISE close-up follows you in ~150 m steps
+  const anchor = useMemo<[number, number] | null>(() => {
+    if (!v) return home;
+    const q = 0.0015;
+    return [Math.round(v.at[0] / q) * q, Math.round(v.at[1] / q) * q];
+  }, [v ? Math.round(v.at[0] / 0.0015) : 0, v ? Math.round(v.at[1] / 0.0015) : 0, home]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // VR
   const [vrOk, setVrOk] = useState<boolean | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   useEffect(() => { (navigator.xr?.isSessionSupported("immersive-vr") ?? Promise.resolve(false)).then(setVrOk, () => setVrOk(false)); }, []);
-
+  const onGl = useCallback((gl: THREE.WebGLRenderer) => { glRef.current = gl; }, []);
   async function enterVr() {
     const gl = glRef.current;
+    audio.start(); setBegun(true);
     if (!gl || !navigator.xr) return;
-    speak.unlock();
     try {
-      const s = await navigator.xr.requestSession("immersive-vr", { optionalFeatures: ["local-floor", "bounded-floor"] });
+      const s = await navigator.xr.requestSession("immersive-vr", { requiredFeatures: ["local-floor"], optionalFeatures: ["bounded-floor"] });
       await gl.xr.setSession(s);
       setErr(null);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(e instanceof DOMException && e.name === "NotAllowedError" ? "VR permission was declined. Allow immersive VR and try again." : e instanceof Error ? e.message : String(e)); }
   }
-  const onGl = useCallback((gl: THREE.WebGLRenderer) => { glRef.current = gl; }, []);
+  function begin() { audio.start(); setBegun(true); glRef.current?.domElement.focus(); }
+
+  // re-render on presenting changes (the HUD hides in VR)
+  const [, force] = useState(0);
+  useEffect(() => rt.subscribe(() => force((n) => n + 1)), [rt]);
 
   if (crewQ.isSuccess && !crew) return <HelmetPicker />;
-  const route = plan?.route;
-  const left = route ? Math.max(0, route.distance_m - progress) : 0;
+  const homeL = hm.data && home ? toLocal(hm.data, home[0], home[1]) : null;
 
   return (
-    <div className="relative h-full bg-black">
-      {hm.data && home && (
+    <div className="relative h-full overflow-hidden bg-black">
+      {hm.data && home && anchor && (
         <Suspense fallback={null}>
-          <Scene hm={hm.data} home={home} plan={plan} progress={progress} cond={cond} alerts={alerts} hazards={hazards} onGl={onGl} onXr={setSession} />
+          <EvaScene hm={hm.data} home={home} rt={rt} view={viewRef} route={v?.route ?? plan?.route ?? null} mode={v?.mode ?? "standby"}
+            storm={v?.storm ?? 0} windDeg={250 + Math.sin(now / 60000) * 30} lmst={v?.cond?.time.lmst ?? 12} anchor={anchor} hazards={v?.hazards ?? []} onGl={onGl} />
         </Suspense>
       )}
 
-      {/* status strip (screens only; in the headset the same is on the in-world panel) */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-3 bg-gradient-to-b from-black/60 to-transparent p-4">
-        <Brand product="EVA Helmet" icon={<HardHat />} />
-        <div className="flex w-80 max-w-[60%] flex-col gap-2">
-        <div className="rounded-xl border bg-card/80 p-3 text-sm backdrop-blur-md">
-          {plan && route ? (
-            <>
-              <div className="flex items-center gap-1.5 text-xs font-medium text-live"><span className="size-1.5 animate-pulse rounded-full bg-live" /> EVA active · {crew?.name}</div>
-              <div className="mt-0.5 truncate font-semibold">{plan.title}</div>
-              <Progress value={(progress / (route.distance_m || 1)) * 100} className="mt-2 h-1.5 [&>div]:bg-live" />
-              <div className="mt-1 flex justify-between text-xs text-muted-foreground tabular-nums">
-                <span>{left < 1 ? "At the target" : `${fmtKm(left)} to go · ~${fmtDur(route.duration_min * (left / (route.distance_m || 1)))}`}</span>
-                <span>sim ×{SPEED}</span>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><Radio className="size-3.5" /> Standby · {crew?.name ?? "…"}</div>
-              <div className="mt-0.5 text-sm">Waiting for the ship to start an EVA.</div>
-            </>
-          )}
-          {cond && (
-            <div className="mt-2 border-t pt-2 text-xs text-muted-foreground tabular-nums">
-              {cond.tempC} °C · wind {cond.windMs} m/s · dust τ {cond.tau.toFixed(1)} · {cond.doseUSvH} µSv/h · LMST {fmtLmst(cond.time.lmst)}
-            </div>
-          )}
-        </div>
-        <AlertList alerts={alerts} max={3} className="backdrop-blur-md" />
-        </div>
-      </div>
+      {v && hm.data && homeL && !rt.presenting && (
+        <EvaHud v={v} rt={rt} hm={hm.data} home={homeL} crewName={crew?.name ?? ""} vrOk={vrOk} muted={muted}
+          onMute={() => { const m = !muted; setMuted(m); audio.setMuted(m); audio.start(); }} onEnterVr={enterVr} />
+      )}
 
-      {!session && (
-        <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-3 bg-gradient-to-t from-black/80 to-transparent p-8 pt-16">
-          {vrOk && (
-            <Button size="lg" className="h-16 rounded-2xl px-10 text-lg shadow-2xl" onClick={enterVr}>
-              <Glasses className="size-6" /> Enter VR
-            </Button>
-          )}
-          {vrOk === false && <p className="max-w-md text-center text-sm text-white/60">Preview on a screen: drag to look around. In the Meta Quest browser this page shows “Enter VR”; after that everything runs by itself.</p>}
-          {err && <div className="w-full max-w-md"><ErrorNote error={`Couldn't start VR: ${err}`} /></div>}
-          <ErrorNote error={plans.error} />
+      {!begun && (
+        <div className="absolute inset-0 z-20 grid place-items-center bg-black/55 p-6 backdrop-blur-sm">
+          <div className="max-w-md text-center">
+            <div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-primary/15 text-primary"><HardHat className="size-7" /></div>
+            <div className="text-xs font-semibold tracking-[0.25em] text-muted-foreground uppercase">EVA Helmet · {crew?.name ?? "…"}</div>
+            <h1 className="mt-2 font-heading text-3xl font-semibold">{plan ? plan.title : "Suit check complete"}</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {plan ? "The ship has started your EVA. Follow the markers on the ground; mission control sees where you are." : "No EVA started yet. You can walk around the base; the route appears when the ship starts the EVA."}
+            </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              <Button size="lg" className="h-12 rounded-xl px-6" disabled={!v} onClick={begin}><Play /> Begin on this screen</Button>
+              {vrOk && <Button size="lg" variant="outline" className="h-12 rounded-xl px-6" disabled={!v} onClick={enterVr}><Glasses /> Enter VR</Button>}
+            </div>
+            {!v && <p className="mt-3 text-xs text-muted-foreground">Loading the surface…</p>}
+            <p className="mt-4 text-xs text-muted-foreground">Sound: life support, breathing, radio and alarms. Suit readouts are simulated.</p>
+            {err && <div className="mt-3"><ErrorNote error={`Couldn't start VR: ${err}`} /></div>}
+            <div className="mt-3"><ErrorNote error={plans.error ?? crewQ.error} /></div>
+          </div>
         </div>
       )}
+      {begun && err && <div className="absolute bottom-24 left-1/2 z-20 w-[min(420px,90%)] -translate-x-1/2"><ErrorNote error={`Couldn't start VR: ${err}`} /></div>}
     </div>
   );
-}
-
-/**
- * New warnings and critical alerts are announced: a tone, then the alert read out (speech synthesis),
- * since in the headset nothing can be clicked. Browsers only allow sound after a user gesture, so
- * `unlock` is called from the Enter VR button.
- */
-function useAlertVoice(alerts: Alert[]) {
-  const heard = useRef<Set<string> | null>(null);
-  const audio = useRef<AudioContext | null>(null);
-  useEffect(() => {
-    const loud = alerts.filter((a) => a.level !== "info");
-    const key = (a: Alert) => `${a.id}:${a.level}:${a.title}`;
-    if (!heard.current) { heard.current = new Set(loud.map(key)); return; } // don't announce what was already there on load
-    const fresh = loud.filter((a) => !heard.current!.has(key(a)));
-    fresh.forEach((a) => heard.current!.add(key(a)));
-    if (!fresh.length) return;
-    const ctx = audio.current;
-    if (ctx && ctx.state === "running") {
-      const critical = fresh.some((a) => a.level === "critical");
-      [0, 0.22, ...(critical ? [0.44] : [])].forEach((t) => {
-        const o = ctx.createOscillator(), g = ctx.createGain();
-        o.frequency.value = critical ? 880 : 660;
-        g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
-        g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + t + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.18);
-        o.connect(g).connect(ctx.destination);
-        o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.2);
-      });
-    }
-    if ("speechSynthesis" in window) {
-      const u = new SpeechSynthesisUtterance(fresh.map((a) => `${a.level === "critical" ? "Warning. " : ""}${a.title}. ${a.text}`).join(" "));
-      u.lang = "en-US"; u.rate = 1.05;
-      window.speechSynthesis.speak(u);
-    }
-  }, [alerts]);
-  return {
-    unlock() {
-      try { audio.current ??= new AudioContext(); void audio.current.resume(); } catch { /* no audio: the panel still shows */ }
-    },
-  };
-}
-
-/**
- * Metres walked along the plan's route: picks up from the last reported progress and advances at the
- * route's walking pace × SPEED, reporting back every few seconds. Restarts only when the plan or its
- * route changes (not on every poll, which brings back our own reports).
- */
-function useSimulatedWalk(plan: WorkPlan | null) {
-  const [m, setM] = useState(0);
-  const { mutate: report } = useReportProgress();
-  const id = plan?.id, stamp = plan?.route?.generated_at;
-
-  useEffect(() => {
-    const route = plan?.route;
-    if (!plan || !route) return;
-    const p0 = Math.min(plan.progress_m ?? 0, route.distance_m), t0 = performance.now();
-    const pace = route.duration_min > 0 ? route.distance_m / (route.duration_min * 60) : 0; // m/s
-    const pos = () => Math.min(route.distance_m, p0 + ((performance.now() - t0) / 1000) * pace * SPEED);
-    const tick = setInterval(() => setM(pos()), 200);
-    let sent = -1;
-    const send = setInterval(() => {
-      const p = Math.round(pos());
-      if (p !== sent) { sent = p; report({ id: plan.id, progress_m: p }); }
-    }, REPORT_MS);
-    return () => { clearInterval(tick); clearInterval(send); };
-  }, [id, stamp]); // eslint-disable-line react-hooks/exhaustive-deps -- see above
-
-  return plan ? m : 0;
 }

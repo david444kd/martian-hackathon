@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { useCrews } from "../lib/queries";
-import { STATUS_LABEL, type PlanStatus, type Route, type WorkPlan } from "../lib/types";
+import { isReturn, STATUS_LABEL, type PlanStatus, type Route, type WorkPlan } from "../lib/types";
+import type { AstronautView } from "../lib/astronaut";
 import { fmtDur, fmtKm } from "../lib/geo";
 
 const STATUS_CLASS: Record<PlanStatus, string> = {
@@ -96,20 +97,39 @@ export function CrewPicker({ base, product, icon, question }: { base: string; pr
   );
 }
 
-/** the active EVA: plan, how far the astronaut has walked (helmet telemetry), and any controls */
-export function EvaCard({ plan, className, children }: { plan: WorkPlan; className?: string; children?: ReactNode }) {
+/** the active EVA: plan, how far the astronaut has walked (helmet telemetry), the live suit report, and any controls */
+export function EvaCard({ plan, astro, className, children }: { plan: WorkPlan; astro?: AstronautView; className?: string; children?: ReactNode }) {
   const total = plan.route?.distance_m ?? 0, done = Math.min(plan.progress_m ?? 0, total);
+  const back = isReturn(plan.route), t = astro?.t;
+  const ago = t ? Math.max(0, Math.round((Date.now() - Date.parse(t.updated_at)) / 1000)) : null;
   return (
-    <div className={cn("rounded-xl border border-live/30 bg-live/10 p-3", className)}>
-      <div className="flex items-center gap-2 text-xs font-medium text-live">
-        <span className="size-1.5 animate-pulse rounded-full bg-live" /> {done >= total - 1 ? "Astronaut at the target" : "EVA in progress"}
+    <div className={cn("rounded-xl border p-3", back ? "border-red-500/50 bg-red-500/10" : "border-live/30 bg-live/10", className)}>
+      <div className={cn("flex items-center gap-2 text-xs font-medium", back ? "text-red-300" : "text-live")}>
+        <span className={cn("size-1.5 animate-pulse rounded-full", back ? "bg-red-400" : "bg-live")} />
+        {back ? `Returning to base · ${plan.route?.reason ?? "recall"}` : done >= total - 1 ? "Astronaut at the target" : "EVA in progress"}
       </div>
       <div className="mt-1 truncate font-medium">{plan.title}</div>
-      <Progress value={(done / (total || 1)) * 100} className="mt-2 h-1.5 [&>div]:bg-live" />
+      <Progress value={(done / (total || 1)) * 100} className={cn("mt-2 h-1.5", back ? "[&>div]:bg-sky-400" : "[&>div]:bg-live")} />
       <div className="mt-1.5 flex justify-between text-xs text-muted-foreground tabular-nums">
-        <span>{fmtKm(done)} of {fmtKm(total)}</span>
+        <span>{fmtKm(done)} of {fmtKm(total)}{back ? " back" : ""}</span>
         <span>{fmtKm(total - done)} to go</span>
       </div>
+      {astro && (
+        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 border-t border-white/10 pt-2 text-xs tabular-nums">
+          {astro.live && t ? (
+            <>
+              <span className="flex items-center gap-1.5 text-live"><span className="size-1.5 animate-pulse rounded-full bg-live" /> Helmet live · {ago}s</span>
+              <span className="text-muted-foreground">{t.speed_ms?.toFixed(1)} m/s · {Math.round(t.heading_deg ?? 0)}°</span>
+              <span>O₂ {t.o2_pct?.toFixed(0)}% · ♥ {t.pulse_bpm?.toFixed(0)}</span>
+              <span className="text-muted-foreground">CO₂ {t.co2_mmhg?.toFixed(1)} · {t.dose_usv?.toFixed(0)} µSv</span>
+              {t.off_route_m != null && t.off_route_m > 40 && <span className="col-span-2 text-amber-300">{fmtKm(t.off_route_m)} off the route</span>}
+            </>
+          ) : (
+            <span className="col-span-2 text-muted-foreground">{t ? `Helmet signal lost ${ago}s ago` : "No helmet signal yet: position from route progress"}</span>
+          )}
+          <span className="col-span-2 text-[10px] text-muted-foreground/70">Suit values are simulated</span>
+        </div>
+      )}
       {children}
     </div>
   );

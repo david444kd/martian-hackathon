@@ -17,12 +17,15 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { activePlan, useCrews, useDeleteCrew, useDeletePlan, useEvents, usePlans } from "../lib/queries";
-import { EVENT_KINDS, LEVEL_RANK, type Crew, type Level, type MarsEvent, type WorkPlan } from "../lib/types";
+import { EVENT_KINDS, LEVEL_RANK, isReturn, type Crew, type Level, type MarsEvent, type WorkPlan } from "../lib/types";
 import { crewHome, useHeightmap, useZone, useZones } from "../lib/zones";
 import { fmtDate, fmtKm, fmtLL } from "../lib/geo";
 import { Brand, ErrorNote, EvaCard, RouteStats, StatusBadge } from "../components/common";
 import { ZoneLeafletMap } from "../components/ZoneLeafletMap";
-import { DOT, LIVE_PIN, pin } from "../components/mapPins";
+import { DOT, pin } from "../components/mapPins";
+import { AstronautLayer } from "../components/AstronautLayer";
+import { useAstronaut } from "../lib/astronaut";
+import { isFresh, useTelemetry } from "../lib/telemetry";
 import { NewCrewDialog, PlanDialog } from "../dispatch/dialogs";
 import { astronautAt } from "../astro/checkpoints";
 import { AlertList, ConditionsGrid, HazardAreas, OutlookBar } from "../components/alerts";
@@ -43,17 +46,19 @@ export function Dispatch() {
   const [raising, setRaising] = useState(false);
   const events = useEvents(), now = useNow();
   const evs = useMemo(() => events.data ?? [], [events.data]);
+  const tele = useTelemetry();
 
   const dots = useMemo(() => (crews.data ?? []).flatMap((c) => {
     const zone = zones.data?.find((z) => z.id === c.zone), home = crewHome(c, zone);
     if (!home) return [];
     const active = activePlan(plans.data?.filter((p) => p.crew_id === c.id));
-    const top = crewAlerts(c, zone, active, evs, now, astronautAt(active))[0];
+    const t = tele.get(c.id)?.t, live = isFresh(t, now) && t ? ([t.lat, t.lon] as [number, number]) : null;
+    const top = crewAlerts(c, zone, active, evs, now, live ?? astronautAt(active))[0];
     const alert: Level | null = top && top.level !== "info" ? top.level : null;
     return [{ id: c.id, name: c.name, lat: home[0], lon: home[1], active: !!active, alert }];
-  }), [crews.data, plans.data, zones.data, evs, now]);
+  }), [crews.data, plans.data, zones.data, evs, now, tele]);
   const hazards = useMemo(() => evs.filter((e) => hasArea(e) && (isActive(e, now) || Date.parse(e.starts_at) - now < 12 * 3600_000) && (!e.ends_at || Date.parse(e.ends_at) > now))
-    .map((e) => ({ id: e.id, lat: e.lat!, lon: e.lon!, level: e.level, label: eventLabel(e), active: isActive(e, now) })), [evs, now]);
+    .map((e) => ({ id: e.id, kind: e.kind, lat: e.lat!, lon: e.lon!, level: e.level, label: eventLabel(e), active: isActive(e, now) })), [evs, now]);
   const solar = evs.filter((e) => e.kind === "solar_storm" && isActive(e, now)).sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level])[0];
   const selected = crews.data?.find((c) => c.id === selectedId);
   const activeCount = dots.filter((d) => d.active).length;
@@ -117,7 +122,8 @@ export function Dispatch() {
 function CrewPanel({ crew, plans, evs, now, onClose }: { crew: Crew; plans: WorkPlan[]; evs: MarsEvent[]; now: number; onClose: () => void }) {
   const zone = useZone(crew.zone), home = crewHome(crew, zone);
   const active = activePlan(plans);
-  const alerts = crewAlerts(crew, zone, active, evs, now, astronautAt(active));
+  const astro = useAstronaut(crew.id, active);
+  const alerts = crewAlerts(crew, zone, active, evs, now, astro.at);
   const cond = zone ? conditions(zone, now, evs) : null;
   const look = useMemo(() => (zone ? outlook(zone, active?.route ?? null, evs, now) : null), [zone, active?.route, evs, now]);
   const [editing, setEditing] = useState<WorkPlan | "new" | null>(null);
@@ -137,7 +143,12 @@ function CrewPanel({ crew, plans, evs, now, onClose }: { crew: Crew; plans: Work
         <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close"><X /></Button>
       </div>
 
-      {active?.route && <EvaCard plan={active} className="mx-4 mb-2" />}
+      {active?.route && <EvaCard plan={active} astro={astro} className="mx-4 mb-2" />}
+      {!active && astro.live && astro.t && (
+        <div className="mx-4 mb-2 rounded-xl border border-live/30 bg-live/5 px-3 py-2 text-xs text-muted-foreground">
+          <span className="text-live">Helmet live</span> · on the surface, no EVA running · {fmtLL(astro.t.lat, astro.t.lon)}
+        </div>
+      )}
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-3 px-4 pb-3">
@@ -159,7 +170,7 @@ function CrewPanel({ crew, plans, evs, now, onClose }: { crew: Crew; plans: Work
             </Empty>
           )}
           {plans.map((p) => (
-            <PlanItem key={p.id} plan={p} evs={evs} now={now} open={open === p.id} onToggle={() => setOpen(open === p.id ? null : p.id)} onEdit={() => setEditing(p)} />
+            <PlanItem key={p.id} plan={p} evs={evs} now={now} open={open === p.id} onToggle={() => setOpen(open === p.id ? null : p.id)} onEdit={() => setEditing(p)} crewId={crew.id} active={active?.id === p.id} />
           ))}
         </div>
       </ScrollArea>
@@ -190,7 +201,7 @@ function CrewPanel({ crew, plans, evs, now, onClose }: { crew: Crew; plans: Work
   );
 }
 
-function PlanItem({ plan, evs, now, open, onToggle, onEdit }: { plan: WorkPlan; evs: MarsEvent[]; now: number; open: boolean; onToggle: () => void; onEdit: () => void }) {
+function PlanItem({ plan, evs, now, open, onToggle, onEdit, crewId, active }: { plan: WorkPlan; evs: MarsEvent[]; now: number; open: boolean; onToggle: () => void; onEdit: () => void; crewId: string; active: boolean }) {
   const del = useDeletePlan();
   return (
     <div className={cn("rounded-xl border bg-background/40 transition-colors", open && "border-primary/40 bg-background/70")}>
@@ -220,24 +231,24 @@ function PlanItem({ plan, evs, now, open, onToggle, onEdit }: { plan: WorkPlan; 
           </AlertDialogContent>
         </AlertDialog>
       </div>
-      {open && <PlanDetails plan={plan} evs={evs} now={now} />}
+      {open && <PlanDetails plan={plan} evs={evs} now={now} crewId={crewId} active={active} />}
     </div>
   );
 }
 
-function PlanDetails({ plan, evs, now }: { plan: WorkPlan; evs: MarsEvent[]; now: number }) {
+function PlanDetails({ plan, evs, now, crewId, active }: { plan: WorkPlan; evs: MarsEvent[]; now: number; crewId: string; active: boolean }) {
   const zone = useZone(plan.zone), hm = useHeightmap(zone);
-  const you = astronautAt(plan);
+  const astro = useAstronaut(crewId, active ? plan : null);
   return (
     <div className="flex flex-col gap-3 border-t px-3 pt-3 pb-3">
       {plan.description && <p className="text-sm whitespace-pre-line text-muted-foreground">{plan.description}</p>}
       {zone && (
         <ZoneLeafletMap zone={zone} hm={hm.data} className="aspect-square rounded-xl border">
           <HazardAreas events={evs} zoneId={zone.id} now={now} />
-          {plan.route && <Polyline positions={plan.route.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={{ color: "#ffb347", weight: 3 }} />}
+          {plan.route && <Polyline positions={plan.route.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={isReturn(plan.route) ? { color: "#5fd8ff", weight: 4, dashArray: "10 6" } : { color: "#ffb347", weight: 3 }} />}
           {plan.route && <Marker position={[plan.route.start.lat, plan.route.start.lon]} icon={pin(`${DOT} bg-landing`, "", 12)} />}
           <Marker position={[plan.target_lat, plan.target_lon]} icon={pin(`${DOT} bg-target`, "", 16)} />
-          {you && <Marker position={you} icon={pin(LIVE_PIN, "", 14)} zIndexOffset={1000} />}
+          {active && <AstronautLayer a={astro} permanent={false} />}
         </ZoneLeafletMap>
       )}
       {plan.route ? <RouteStats route={plan.route} /> : <p className="text-xs text-muted-foreground">The ship hasn't made a route yet.</p>}

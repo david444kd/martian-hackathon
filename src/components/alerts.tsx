@@ -1,6 +1,6 @@
 // Shared pieces for the events: alert cards, the conditions panel, the 24-hour safety outlook and
 // the anomalies on a Leaflet zone map. Used by all three apps so they look and read the same.
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { Circle, Tooltip } from "react-leaflet";
 import { CheckCheck, Info, OctagonAlert, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,8 @@ import { eventLabel, fmtLmst, isActive, marsTime, season, type Conditions } from
 import { fmtDur } from "../lib/geo";
 import type { Level, MarsEvent } from "../lib/types";
 import type { Zone } from "../lib/zones";
-import { LEVEL_CLASS, LEVEL_COLOR } from "./levels";
+import { LEVEL_CLASS } from "./levels";
+import { StormCanvas } from "./StormLayer";
 
 export const LevelIcon = ({ level, className }: { level: Level; className?: string }) => {
   const I = level === "critical" ? OctagonAlert : level === "warning" ? TriangleAlert : Info;
@@ -121,19 +122,25 @@ export function EvaCheckView({ check }: { check: EvaCheck }) {
   );
 }
 
-/** anomaly areas in this zone on a Leaflet map: filled while active, dashed while only forecast */
+/**
+ * anomaly areas in this zone on a Leaflet map: a live picture of each (a churning dust storm, a
+ * vortex, a debris field), full strength while active and faint while only forecast; the invisible
+ * circle over it carries the tooltip
+ */
 export function HazardAreas({ events, zoneId, now }: { events: MarsEvent[]; zoneId: string; now: number }) {
   return (
     <>
       {areaHazards(events, zoneId, now, now + 12 * 3600_000).map((e) => {
-        const on = isActive(e, now), color = LEVEL_COLOR[e.level];
+        const on = isActive(e, now);
         return (
-          <Circle key={e.id} center={[e.lat!, e.lon!]} radius={e.radius_m!} interactive
-            pathOptions={{ color, weight: 2, fillColor: color, fillOpacity: on ? 0.22 : 0.05, dashArray: on ? undefined : "6 6" }}>
-            <Tooltip direction="top" sticky>
-              <b>{eventLabel(e)}</b> · {on ? (e.ends_at ? `until ${new Date(e.ends_at).toLocaleTimeString([], { timeStyle: "short" })}` : "active") : `from ${new Date(e.starts_at).toLocaleTimeString([], { timeStyle: "short" })}`}
-            </Tooltip>
-          </Circle>
+          <Fragment key={e.id}>
+            <StormCanvas e={e} active={on} />
+            <Circle center={[e.lat!, e.lon!]} radius={e.radius_m!} interactive pathOptions={{ stroke: false, fillOpacity: 0 }}>
+              <Tooltip direction="top" sticky>
+                <b>{eventLabel(e)}</b> · {on ? (e.ends_at ? `until ${new Date(e.ends_at).toLocaleTimeString([], { timeStyle: "short" })}` : "active") : `from ${new Date(e.starts_at).toLocaleTimeString([], { timeStyle: "short" })}`}
+              </Tooltip>
+            </Circle>
+          </Fragment>
         );
       })}
     </>

@@ -1,0 +1,10 @@
+.eva-visor{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:8}
+.eva-visor-glass{position:absolute;inset:0;box-shadow:inset 0 0 56px 8px #0b1b2424;background:linear-gradient(118deg,#cce3e508,transparent 18%,transparent 82%,#d7e6c807)}
+.eva-visor-seal{position:absolute;inset:13px 12px 18px;border-inline:1px solid #111e2a50;border-radius:11%/10%;box-shadow:inset 1px 0 #d7e3cf22,inset -1px 0 #d7e3cf22}
+.eva-visor-brow{position:absolute;top:-58px;left:-3%;right:-3%;height:88px;background:linear-gradient(#080f14 39%,#203139 68%,#111d24 86%,#6b7b7744 98%);border-bottom:2px solid #d3d5bb30;border-radius:0 0 49% 49%/0 0 48% 48%;box-shadow:0 4px 15px #0c1b292b;display:flex;justify-content:space-between;padding:0 8%;align-items:flex-end}
+.eva-visor-brow i{display:block;width:12%;height:4px;background:#101a20;border-top:1px solid #5b666944;border-bottom:1px solid #080f15;border-radius:8px;margin-bottom:12px;transform:skewX(-18deg)}
+.eva-visor-brow span{width:74px;height:7px;background:#0b161d;border:1px solid #44524c;margin-bottom:3px;border-radius:3px}
+.eva-visor-jaw{position:absolute;bottom:-58px;left:-5%;right:-5%;height:86px;border-radius:50% 50% 0 0/37% 37% 0 0;background:linear-gradient(180deg,#59666070,#14232b 9%,#26333a 21%,#09131d 55%);border-top:1px solid #d3d5bb44;box-shadow:0 -6px 17px #10202c26;display:flex;justify-content:space-between;padding:10px 17%}
+.eva-visor-jaw i{height:4px;width:11%;border-radius:8px;background:#101b23;border-top:1px solid #65716c4e;border-bottom:1px solid #050c12;transform:rotate(3deg)}
+.eva-visor-jaw span{width:80px;height:11px;border:1px solid #62756a55;border-radius:8px;background:#0c1921}
+@media(max-width:700px){.eva-visor-seal{inset:8px 6px 12px}.eva-visor-jaw span,.eva-visor-brow span{width:42px}}

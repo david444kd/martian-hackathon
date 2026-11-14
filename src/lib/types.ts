@@ -32,6 +32,32 @@ export interface Route {
   descent_m: number;
   max_slope_deg: number;
   generated_at: string;
+  /** "return": a recall route back to the crew's base (made by the helmet or the ship); absent = outbound */
+  mode?: "out" | "target" | "return";
+  /** why a return route was made (the event that triggered it) */
+  reason?: string;
+}
+
+export const isReturn = (r: Route | null | undefined) => r?.mode === "return";
+
+/** the helmet's live report (table eva_telemetry and the "eva-live" broadcast) */
+export interface EvaTelemetry {
+  crew_id: string;
+  plan_id: string | null;
+  lat: number;
+  lon: number;
+  elev_m: number | null;
+  heading_deg: number | null;
+  speed_ms: number | null;
+  progress_m: number | null;
+  off_route_m: number | null;
+  mode: "standby" | "out" | "return" | "complete";
+  o2_pct: number | null;
+  pulse_bpm: number | null;
+  co2_mmhg: number | null;
+  suit_kpa: number | null;
+  dose_usv: number | null;
+  updated_at: string;
 }
 
 export interface WorkPlan {

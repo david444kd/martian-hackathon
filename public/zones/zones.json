@@ -1,0 +1,44 @@
+[
+  {
+    "id": "jezero",
+    "name": "Jezero Crater",
+    "description": "Ancient river delta and lake bed, CTX DTM 20 m",
+    "file": "/zones/jezero.bin",
+    "width": 512,
+    "height": 512,
+    "north": 18.556537378457598,
+    "south": 18.3837823847105,
+    "west": 77.33355786506793,
+    "east": 77.50631285881504,
+    "dx": 18.932407932775348,
+    "dy": 19.960602910908992,
+    "min": -2649.6923828125,
+    "max": -2299.84912109375,
+    "base": {
+      "name": "Perseverance landing",
+      "lat": 18.4447,
+      "lon": 77.4508
+    }
+  },
+  {
+    "id": "gale",
+    "name": "Gale Crater",
+    "description": "Foot of Mount Sharp, HiRISE DTM 20 m",
+    "file": "/zones/gale.bin",
+    "width": 512,
+    "height": 512,
+    "north": -4.553646180883006,
+    "south": -4.726401174630098,
+    "west": 137.31378379113175,
+    "east": 137.48653878487886,
+    "dx": 19.895184284630087,
+    "dy": 19.96060291090808,
+    "min": -4531.0859375,
+    "max": -3744.2119140625,
+    "base": {
+      "name": "Bradbury Landing",
+      "lat": -4.5895,
+      "lon": 137.4417
+    }
+  }
+]

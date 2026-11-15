@@ -22,6 +22,8 @@ import { useEva, type EvaView } from "../eva/useEva";
 import { EvaHud } from "../eva/EvaHud";
 import { toLocal } from "../eva/frame";
 import { LanguageSwitcher } from "../components/LanguageSwitcher";
+import { simulatedDust, simulatedStormAt, SIMULATED_DUST, SIMULATED_HUD, withSimulatedAlerts, XR_PREVIEW } from "../eva/xrPreview";
+import { QUEST } from "../eva/quality";
 
 const EvaScene = lazy(() => import("../eva/EvaScene").then((m) => ({ default: m.EvaScene })));
 
@@ -53,10 +55,13 @@ export function Helmet() {
   const audio = useMemo(() => new SuitAudio(), []);
   const suit = useMemo(() => new SuitModel(crewId ?? "none"), [crewId]);
   useEffect(() => () => audio.dispose(), [audio]);
+  useEffect(() => { if (import.meta.env.DEV) (window as unknown as { __evaAudio: SuitAudio }).__evaAudio = audio; }, [audio]); // sound levels from the console
   const [muted, setMuted] = useState(false);
   const [begun, setBegun] = useState(false);
 
-  const v = useEva({ crew, zone, hm: hm.data, home, plan, evs, now, rt, audio, suit });
+  const live = useEva({ crew, zone, hm: hm.data, home, plan, evs, now, rt, audio, suit });
+  // ?simhud=…: sample alerts on this display only (eva/xrPreview.ts)
+  const v = SIMULATED_HUD && live && hm.data && home ? withSimulatedAlerts(live, hm.data, home) : live;
   const viewRef = useRef<EvaView | null>(null);
   viewRef.current = v;
 
@@ -66,6 +71,11 @@ export function Helmet() {
     const q = 0.0015;
     return [Math.round(v.at[0] / q) * q, Math.round(v.at[1] / q) * q];
   }, [v ? Math.round(v.at[0] / 0.0015) : 0, v ? Math.round(v.at[1] / 0.0015) : 0, home]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ?simstorm / ?simdevil: dust drawn in this view only, to look at the effect (eva/xrPreview.ts)
+  const sim = useMemo(() => (SIMULATED_DUST && hm.data && home ? simulatedDust(hm.data, home) : []), [hm.data, home]);
+  const sceneHazards = useMemo(() => (sim.length ? [...(v?.hazards ?? []), ...sim] : v?.hazards ?? []), [sim, v?.hazards]);
+  const sceneStorm = sim.length && hm.data ? Math.max(v?.storm ?? 0, simulatedStormAt(hm.data, sim, rt.pose)) : v?.storm ?? 0;
 
   // VR
   const [vrOk, setVrOk] = useState<boolean | null>(null);
@@ -79,6 +89,9 @@ export function Helmet() {
     if (!gl || !navigator.xr) return;
     try {
       const s = await navigator.xr.requestSession("immersive-vr", { requiredFeatures: ["local-floor"], optionalFeatures: ["bounded-floor"] });
+      // a steady 72 Hz is easier on a standalone headset than a 90 Hz it cannot hold
+      const rates = (s as XRSession & { supportedFrameRates?: Float32Array; updateTargetFrameRate?: (r: number) => Promise<void> });
+      if (QUEST && rates.supportedFrameRates && Array.from(rates.supportedFrameRates).includes(72)) void rates.updateTargetFrameRate?.(72).catch(() => {});
       await gl.xr.setSession(s);
       setErr(null);
     } catch (e) { setErr(e instanceof DOMException && e.name === "NotAllowedError" ? t("helmet.vr_declined") : e instanceof Error ? e.message : String(e)); }
@@ -97,11 +110,11 @@ export function Helmet() {
       {hm.data && home && anchor && (
         <Suspense fallback={null}>
           <EvaScene hm={hm.data} home={home} rt={rt} view={viewRef} route={v?.route ?? plan?.route ?? null} mode={v?.mode ?? "standby"}
-            storm={v?.storm ?? 0} windDeg={250 + Math.sin(now / 60000) * 30} lmst={v?.cond?.time.lmst ?? 12} anchor={anchor} hazards={v?.hazards ?? []} onGl={onGl} />
+            storm={sceneStorm} windDeg={250 + Math.sin(now / 60000) * 30} lmst={v?.cond?.time.lmst ?? 12} anchor={anchor} hazards={sceneHazards} onGl={onGl} />
         </Suspense>
       )}
 
-      {v && hm.data && homeL && !rt.presenting && (
+      {v && hm.data && homeL && !rt.presenting && !XR_PREVIEW && (
         <EvaHud v={v} rt={rt} hm={hm.data} home={homeL} crewName={crew?.name ?? ""} vrOk={vrOk} muted={muted}
           onMute={() => { const m = !muted; setMuted(m); audio.setMuted(m); audio.start(); }} onEnterVr={enterVr} />
       )}

@@ -1,18 +1,16 @@
-// The suit display on a screen: the helmet visor frame over the view, suit systems top left, the
-// heading tape, navigation top right, the map bottom left, calls and warnings in the middle, and the
-// big RETURN TO BASE alert when the EVA is recalled. In VR the same is drawn inside the headset.
+// The suit display on a screen: the helmet visor over the view (glass, shell, breath fog) and the
+// same head-up display blocks as inside the headset (xrHud.ts), pinned round the edge of the visor on a
+// canvas over the view, sharp at the screen's pixel ratio. The display is information only; the demo operator
+// gets two small buttons in the corner (sound, Enter VR) and hold-to-walk pads on touch screens.
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, Bot, Check, Footprints, Gauge, Glasses, HardHat, House, Radiation, Radio, Satellite, ShieldAlert, Volume2, VolumeX, Wind } from "lucide-react";
+import { Glasses, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Heightmap } from "../lib/zones";
-import { LEVEL_COLOR } from "../components/levels";
-import { fmtDur, fmtKm } from "../lib/geo";
-import { fmtLmst } from "../lib/mars";
-import { compass, drawMap, ROUTE_BACK, ROUTE_OUT } from "./draw";
 import type { P2 } from "./frame";
 import type { EvaRuntime } from "./runtime";
 import type { EvaApi } from "./useEva";
+import { drawHudScreen } from "./xrHud";
 import "./eva.css";
 
 interface Props {
@@ -27,14 +25,11 @@ interface Props {
   onEnterVr: () => void;
 }
 
-export function EvaHud({ v, rt, hm, home, crewName, vrOk, muted, onMute, onEnterVr }: Props) {
+export function EvaHud({ v, rt, hm, home, vrOk, muted, onMute, onEnterVr }: Props) {
   const { t } = useTranslation();
-  const s = v.suit, hd = rt.pose.heading;
-  const back = v.mode === "return" || v.mode === "complete";
-  const routeColor = back ? ROUTE_BACK : ROUTE_OUT;
+  const s = v.suit;
   const recalled = v.mode === "return" || v.recall.state === "computing" || v.recall.state === "failed";
   const critical = recalled || v.top?.level === "critical";
-  const since = v.link.lastSent ? Math.round((Date.now() - v.link.lastSent) / 1000) : null;
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10 select-none text-[#e8efe9]">
@@ -48,183 +43,54 @@ export function EvaHud({ v, rt, hm, home, crewName, vrOk, muted, onMute, onEnter
         <div className="eva-visor-seal" />
       </div>
 
-      {/* suit systems */}
-      <section className="eva-panel absolute top-5 left-5 w-[260px] max-sm:w-[200px]">
-        <header className="flex items-center justify-between text-[11px] tracking-[0.18em] text-[#9fb7b0] uppercase">
-          <span className="flex items-center gap-1.5"><HardHat className="size-3.5" /> {t("evahud.suit")} · {crewName}</span>
-          <b className={cn(s.status === "NOMINAL" ? "text-[#7be08a]" : s.status === "CAUTION" ? "text-amber-300" : "animate-pulse text-red-400")}>{t(`evahud.status_${s.status.toLowerCase()}`)}</b>
-        </header>
-        <div className="mt-2 flex items-end justify-between">
-          <div>
-            <div className="text-[11px] text-[#9fb7b0]">{t("evahud.o2_primary")}</div>
-            <div className={cn("text-4xl font-semibold tabular-nums", s.o2Pct < 30 && "text-red-300")}>{s.o2Pct.toFixed(0)}<small className="text-base">%</small></div>
-          </div>
-          <div className="text-right text-xs text-[#cfe0da] tabular-nums">
-            <div>{t("evahud.time_left", { time: fmtDur(s.remainingMin) })}</div>
-            <div>{s.kpa.toFixed(1)} kPa · {t("evahud.battery")} {s.batteryPct.toFixed(0)}%</div>
-          </div>
-        </div>
-        <div className="mt-1.5 h-1 overflow-hidden rounded bg-white/10"><i className="block h-full bg-[#7fe0c4]" style={{ width: `${s.o2Pct}%` }} /></div>
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs tabular-nums">
-          <div className="flex items-center gap-1.5"><Activity className="size-3.5 text-[#ff9d91]" /> {s.pulse.toFixed(0)} {t("evahud.bpm")}</div>
-          <div className="flex items-center gap-1.5"><Wind className="size-3.5" /> {s.resp.toFixed(0)} {t("evahud.per_min")}</div>
-          <div className={cn("flex items-center gap-1.5", s.co2 > 6 && "text-amber-300")}><Gauge className="size-3.5" /> CO₂ {s.co2.toFixed(1)}</div>
-          <div className={cn("flex items-center gap-1.5", (v.cond?.doseUSvH ?? 0) > 80 && "text-red-300")}><Radiation className="size-3.5" /> {v.cond?.doseUSvH ?? "–"} µSv/h</div>
-        </div>
-        <svg viewBox="0 0 116 20" className="eva-ecg mt-2 h-4 w-full" style={{ animationDuration: `${60 / Math.max(40, s.pulse)}s` }} aria-hidden>
-          <path d="M0 12H15L19 9L23 14H34L39 11L44 12L49 2L53 19L57 9L61 12H80L84 10L89 13H116" />
-        </svg>
-        <div className="mt-1 text-[10px] text-white/40">{t("evahud.simulated_note")}</div>
-      </section>
+      {/* the head-up display projected on the visor */}
+      <HudCanvas v={v} rt={rt} hm={hm} home={home} />
 
-      {/* heading tape */}
-      <div className="eva-panel absolute top-5 left-1/2 w-[min(440px,46vw)] -translate-x-1/2 overflow-hidden px-0 py-2 max-sm:top-auto max-sm:bottom-28">
-        <div className="relative h-9">
-          {Array.from({ length: 25 }, (_, i) => {
-            const deg = Math.round(hd / 5) * 5 + (i - 12) * 5, x = 50 + ((deg - hd) / 60) * 50;
-            const label = ((deg % 360) + 360) % 360;
-            return (
-              <div key={i} className="absolute top-0 -translate-x-1/2 text-center" style={{ left: `${x}%` }}>
-                <div className={cn("mx-auto w-px bg-[#d9e6e1]", deg % 15 === 0 ? "h-3" : "h-1.5")} />
-                {label % 45 === 0 && <div className="mt-0.5 text-[11px] font-semibold">{compass(label)}</div>}
-              </div>
-            );
-          })}
-          <Mark bearing={v.bearingBase} hd={hd} color="#e9f2ef" title={t("evahud.base")} />
-          {v.guide && <Mark bearing={v.guide.bearing} hd={hd} color={routeColor} title={t("evahud.route")} />}
-          <div className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 text-[11px] font-semibold tabular-nums">{Math.round(hd).toString().padStart(3, "0")}°</div>
-        </div>
-      </div>
-
-      {/* navigation */}
-      <section className="eva-panel absolute top-5 right-5 w-[280px] max-sm:w-[190px]" style={{ borderColor: routeColor + "66" }}>
-        <header className="flex items-center justify-between text-[11px] tracking-[0.18em] text-[#9fb7b0] uppercase">
-          <span className="flex items-center gap-1.5">{back ? <House className="size-3.5" /> : <Footprints className="size-3.5" />}
-            {v.mode === "return" ? t("evahud.return_to_base") : v.mode === "out" ? t("evahud.outbound") : v.mode === "complete" ? t("evahud.at_base") : t("evahud.standby")}</span>
-          {rt.autopilot && <b className="flex items-center gap-1 text-[#9fe3ff]"><Bot className="size-3.5" /> {t("evahud.auto")}</b>}
-        </header>
-        {v.route ? (
-          <>
-            <div className="mt-1 truncate text-sm font-medium" style={{ color: routeColor }}>{back ? v.route.reason ?? t("evahud.recall") : v.plan?.title ?? ""}</div>
-            <div className="mt-1 text-3xl font-semibold tabular-nums">{v.arrived ? t("evahud.arrived") : fmtKm(v.left)}</div>
-            {!v.arrived && v.guide && <div className="text-sm text-[#cfe0da] tabular-nums">{t("evahud.head", { deg: Math.round(v.guide.bearing), dir: compass(v.guide.bearing), time: fmtDur(v.etaMin) })}</div>}
-            <div className="mt-2 h-1 overflow-hidden rounded bg-white/10"><i className="block h-full" style={{ width: `${Math.min(100, (v.progress / (v.line?.length || 1)) * 100)}%`, background: routeColor }} /></div>
-            {v.rerouting ? <div className="mt-2 rounded bg-sky-400/15 px-2 py-1 text-xs text-sky-200">{t("evahud.rerouting")}</div>
-              : v.offRoute > 40 && !v.arrived && <div className="mt-2 rounded bg-amber-400/15 px-2 py-1 text-xs text-amber-200">{v.progress < 1 && v.offRoute > 60 ? t("evahud.route_starts_away", { m: Math.round(v.offRoute) }) : t("evahud.off_route_by", { m: Math.round(v.offRoute) })}</div>}
-          </>
-        ) : (
-          <div className="mt-1 text-sm text-[#cfe0da]">{t("evahud.no_eva_hint")}</div>
-        )}
-        <div className="mt-2 flex justify-between border-t border-white/10 pt-2 text-xs text-[#cfe0da] tabular-nums">
-          <span>{t("evahud.base")} {fmtKm(v.toBase)} {compass(v.bearingBase)}</span>
-          <span>{t("evahud.slope")} {rt.pose.slope.toFixed(0)}° · {rt.pose.speed.toFixed(1)} m/s</span>
-        </div>
-      </section>
-
-      {/* map */}
-      <section className="eva-panel absolute bottom-5 left-5 p-2 max-sm:hidden">
-        <MiniMap v={v} rt={rt} hm={hm} home={home} />
-        <div className="mt-1.5 flex items-center justify-between px-1 text-[10px] text-[#9fb7b0] tabular-nums">
-          <span>{v.at[0].toFixed(5)}°, {v.at[1].toFixed(5)}°</span>
-          <span>{Math.round(v.elev)} m</span>
-        </div>
-      </section>
-
-      {/* link and conditions */}
-      <section className="eva-panel absolute right-5 bottom-5 w-[280px] text-xs max-sm:hidden">
-        <div className="flex items-center justify-between">
-          <span className="flex items-center gap-1.5"><Satellite className="size-3.5" /> {t("evahud.link_to_ship")}</span>
-          <span className={cn("tabular-nums", since != null && since < 6 ? "text-[#7be08a]" : "text-amber-300")}>{since == null ? t("evahud.connecting") : t("evahud.sent_ago", { ago: since })}</span>
-        </div>
-        <div className="mt-1 text-[10px] text-white/45">{t("evahud.position_every")}{v.link.table === false ? ` ${t("evahud.no_table_hint")}` : ""}</div>
-        {v.cond && (
-          <div className="mt-2 grid grid-cols-2 gap-1 border-t border-white/10 pt-2 text-[#cfe0da] tabular-nums">
-            <span>{v.cond.tempC} °C</span><span>{t("evahud.wind")} {v.cond.windMs} m/s</span>
-            <span className={cn(v.storm > 0.4 && "text-amber-300")}>{t("evahud.dust")} τ {v.cond.tau.toFixed(1)}</span><span>LMST {fmtLmst(v.cond.time.lmst)}</span>
-          </div>
-        )}
-      </section>
-
-      {/* alerts */}
-      <div className="absolute top-[30%] left-1/2 flex w-[min(620px,90vw)] -translate-x-1/2 flex-col items-center gap-3">
-        {recalled && <RecallBanner v={v} />}
-        {!recalled && v.top && (
-          <section className="eva-panel pointer-events-auto flex w-full items-start gap-3 border-l-4" style={{ borderLeftColor: LEVEL_COLOR[v.top.level] }}>
-            {v.top.event.kind === "message" ? <Radio className="mt-0.5 size-5 shrink-0" /> : <ShieldAlert className="mt-0.5 size-5 shrink-0" style={{ color: LEVEL_COLOR[v.top.level] }} />}
-            <div className="min-w-0 flex-1">
-              <div className="text-[11px] tracking-[0.18em] uppercase" style={{ color: LEVEL_COLOR[v.top.level] }}>
-                {v.top.level === "critical" ? t("evahud.priority_emergency") : v.top.level === "warning" ? t("evahud.priority_caution") : t("evahud.mission_command")}
-              </div>
-              <div className="font-semibold">{v.top.title}</div>
-              <p className="text-sm text-[#dfe7e2]">{v.top.text}</p>
-            </div>
-            <button type="button" onClick={v.ack} className="grid size-9 shrink-0 place-items-center rounded-full border border-white/30 hover:bg-white/10" title={t("evahud.acknowledge")}><Check className="size-4" /></button>
-          </section>
-        )}
-        {v.mode === "complete" && <div className="eva-panel text-center text-lg font-semibold text-[#c9f5d3]">{t("evahud.airlock_complete")}</div>}
-        {v.mode === "out" && v.arrived && !v.top && <div className="eva-panel text-center"><div className="text-lg font-semibold text-[#c9f5d3]">{t("evahud.target_reached")}</div><div className="text-sm">{v.plan?.description || t("evahud.carry_out_plan")}</div></div>}
-        {rt.pose.blocked && <div className="eva-panel border-amber-400/50 py-2 text-sm text-amber-200">{rt.pose.blocked}</div>}
-      </div>
-
-      {/* reticle */}
-      <div className="absolute top-1/2 left-1/2 size-6 -translate-1/2 rounded-full border border-white/25" aria-hidden />
-
-      {/* controls */}
-      <div className="absolute inset-x-0 bottom-5 flex flex-col items-center gap-2 max-sm:bottom-3">
-        <div className="pointer-events-auto flex items-center gap-2">
-          <button type="button" className="eva-btn" onClick={onMute} title={muted ? t("evahud.sound_on") : t("evahud.mute")}>{muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}</button>
-          <button type="button" className={cn("eva-btn", rt.autopilot && "eva-btn-on")} disabled={!v.line} onClick={() => { rt.autopilot = !rt.autopilot; rt.notify(); }} title={t("evahud.autopilot_hint")}>
-            <Bot className="size-4" /> {t("evahud.autopilot")}
+      {/* operator controls for the demo, out of the way: the astronaut's display has nothing to press */}
+      <div className="absolute right-4 bottom-4 flex flex-col items-end gap-2">
+        <div className="pointer-events-auto flex items-center gap-1.5 opacity-60 transition-opacity hover:opacity-100">
+          <button type="button" className="eva-btn" onClick={onMute} title={muted ? t("evahud.sound_on") : t("evahud.mute")} aria-label={muted ? t("evahud.sound_on") : t("evahud.mute")}>
+            {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
           </button>
-          {vrOk && <button type="button" className="eva-btn eva-btn-on" onClick={onEnterVr}><Glasses className="size-4" /> {t("helmet.enter_vr")}</button>}
+          {vrOk && <button type="button" className="eva-btn" onClick={onEnterVr}><Glasses className="size-4" /> {t("helmet.enter_vr")}</button>}
         </div>
-        <div className="text-[11px] text-white/55 max-sm:hidden">{t("evahud.screen_controls")}</div>
-        <TouchPad rt={rt} />
       </div>
+      <div className="absolute inset-x-0 bottom-3 flex justify-center"><TouchPad rt={rt} /></div>
     </div>
   );
 }
 
-function Mark({ bearing, hd, color, title }: { bearing: number; hd: number; color: string; title: string }) {
-  let d = bearing - hd; d = ((d + 540) % 360) - 180;
-  const x = 50 + (Math.max(-58, Math.min(58, d)) / 60) * 50;
-  return <div className="absolute top-3.5 -translate-x-1/2" style={{ left: `${x}%` }} title={title}>
-    <div className="size-0 border-x-[6px] border-b-[9px] border-x-transparent" style={{ borderBottomColor: color }} />
-  </div>;
-}
-
-function RecallBanner({ v }: { v: EvaApi }) {
-  const { t } = useTranslation();
-  const failed = v.recall.state === "failed", computing = v.recall.state === "computing";
-  return (
-    <section className="eva-recall pointer-events-auto w-full text-center">
-      <div className="text-[11px] tracking-[0.25em] text-red-200 uppercase">{t("evahud.priority_abort")}</div>
-      <div className="mt-1 text-3xl font-bold tracking-wide text-white">{failed ? t("evahud.hold_position") : t("evahud.return_to_base_upper")}</div>
-      <div className="mt-1 text-sm text-red-100">{v.recall.reason || v.route?.reason || t("evahud.recall_from_ship")}</div>
-      <div className="mt-2 text-sm text-white/90">
-        {failed ? t("evahud.no_return_route", { err: v.recall.error ?? t("evahud.contact_ship") }) : computing ? t("evahud.preparing_return") : t("evahud.follow_blue_full", { dist: fmtKm(v.left), time: fmtDur(v.etaMin) })}
-      </div>
-    </section>
-  );
-}
-
-function MiniMap({ v, rt, hm, home }: { v: EvaApi; rt: EvaRuntime; hm: Heightmap; home: P2 }) {
+/** the visor HUD at 30 fps over the whole view, its blocks pinned round the visor edge */
+function HudCanvas({ v, rt, hm, home }: { v: EvaApi; rt: EvaRuntime; hm: Heightmap; home: P2 }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  const vr = useRef(v);
-  vr.current = v;
+  // the latest props for the drawing loop, which runs on its own (the page re-renders often)
+  const latest = useRef({ v, rt, hm, home });
+  useEffect(() => { latest.current = { v, rt, hm, home }; });
   useEffect(() => {
-    const draw = () => {
-      const c = ref.current;
-      if (!c) return;
-      const ctx = c.getContext("2d")!;
-      ctx.clearRect(0, 0, c.width, c.height);
-      drawMap(ctx, hm, vr.current, rt, home, 0, 0, c.width);
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d")!;
+    let k = 1, w = 0, ht = 0, raf = 0, last = 0;
+    const fit = () => {
+      const r = c.getBoundingClientRect();
+      k = Math.min(2, window.devicePixelRatio || 1); w = r.width; ht = r.height;
+      const pw = Math.round(w * k), ph = Math.round(ht * k);
+      if (c.width !== pw || c.height !== ph) { c.width = pw; c.height = ph; }
     };
-    draw();
-    const id = setInterval(draw, 250);
-    return () => clearInterval(id);
-  }, [hm, rt, home]);
-  return <canvas ref={ref} width={420} height={420} className="block size-[210px]" />;
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(c);
+    const frame = (ms: number) => {
+      raf = requestAnimationFrame(frame);
+      if (ms - last < 33 || !w) return;
+      last = ms;
+      const p = latest.current;
+      drawHudScreen(ctx, { hm: p.hm, v: p.v, rt: p.rt, home: p.home, t: ms / 1000 }, w, ht, k);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, []);
+  return <canvas ref={ref} className="absolute inset-0 size-full" aria-hidden />;
 }
 
 /** on touch screens: hold to walk / turn */

@@ -2,7 +2,8 @@
 // the route they are, the alerts (with alarm, radio tones and voice), the automatic recall to base
 // when a hazard reaches the route, and the telemetry sent every 2.5 s to mission control and the ship.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Crew, MarsEvent, Route, WorkPlan } from "../lib/types";
+import { wind } from "./wind";
+import type { Crew, Level, MarsEvent, Route, WorkPlan } from "../lib/types";
 import { isReturn } from "../lib/types";
 import type { Heightmap, Zone } from "../lib/zones";
 import { areaHazards, avoidList, crewAlerts, routeHit, type Alert } from "../lib/hazards";
@@ -60,7 +61,11 @@ export interface EvaView {
   suit: SuitModel["s"];
   hazards: MarsEvent[];    // area anomalies active in the zone
   rerouting: boolean;      // off the route: a new one is being made
+  /** a short notice for the display, for a dozen seconds: a new route from the ship, a reroute, a failed one */
+  notice: Notice | null;
 }
+export interface Notice { text: string; level: Level; from: "ship" | "suit"; at: number }
+const NOTICE_MS = 12_000;
 
 interface Args {
   crew: Crew | undefined; zone: Zone | undefined; hm: Heightmap | undefined; home: [number, number] | null;
@@ -113,6 +118,8 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
   const [acked, setAcked] = useState<Set<string>>(() => new Set());
   const [recall, setRecall] = useState<RecallState>({ state: "idle", reason: "" });
   const [rerouting, setRerouting] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const note = (text: string, level: Level, from: Notice["from"]) => setNotice({ text, level, from, at: Date.now() });
   const tried = useRef(new Set<string>());
   const reachedTarget = useRef(false);
   const lastSent = useRef(0);
@@ -149,8 +156,9 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
       bearingEnd: end ? bearingOf(end.x - here.x, end.z - here.z) : null,
       at, elev: areoid(hm, p.x, p.z), alerts, top, recall, storm, cond: conditions(zone, now, evs), arrived,
       link: { lastSent: lastSent.current, table: telemetryTable() }, suit: { ...suit.s }, hazards, rerouting,
+      notice: notice && Date.now() - notice.at < NOTICE_MS ? notice : null,
     };
-  }, [tick, hm, zone, crew, home, line, route, plan, evs, now, acked, recall, rt, suit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tick, hm, zone, crew, home, line, route, plan, evs, now, acked, recall, rt, suit, notice]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // closed areas for the Player (critical anomalies: may be left, not entered)
   useEffect(() => {
@@ -172,7 +180,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
       lastY = rt.pose.y; lastPos = { x: rt.pose.x, z: rt.pose.z };
       const alarm = v?.top && v.top.level !== "info" ? 1 : v?.mode === "return" ? 0.6 : 0;
       suit.step(dt, Math.min(rt.pose.speed, 3), climb, v?.cond?.doseUSvH ?? 25, alarm, v?.storm ?? 0);
-      audio.update(suit.s.resp, suit.s.exertion, rt.pose.moving, rt.pose.speed, v?.storm ?? 0);
+      audio.update(suit.s.resp, suit.s.exertion, rt.pose.moving, rt.pose.speed, wind.storm, suit.s.pulse);
     }, 500);
     return () => clearInterval(id);
   }, [rt, suit, audio]);
@@ -249,6 +257,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
       } else {
         setRecall({ state: "idle", reason: "" });
         audio.radio();
+        note(say("new_route"), "info", "ship");
         setTimeout(() => audio.line("new-route", say("new_route")), 700);
       }
     }
@@ -314,6 +323,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
     if (t - offSince.current < REROUTE_AFTER_MS || t - lastReroute.current < REROUTE_GAP_MS) return;
     lastReroute.current = t; offSince.current = null;
     setRerouting(true);
+    note(say("off_route"), "warning", "suit");
     audio.line("off-route", say("off_route"));
     const avoid = avoidList(areaHazards(evs, zone.id, now, now + 6 * 3600_000));
     const back = isReturn(route);
@@ -325,8 +335,8 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit }
       }));
     make
       .then((r) => updatePlan.mutateAsync({ id: plan.id, patch: { route: r, progress_m: 0 } }))
-      .then(() => { if (back) audio.line("route-home-updated", say("route_home_updated")); })
-      .catch(() => audio.line("no-reroute", say("no_reroute")))
+      .then(() => { if (back) { note(say("route_home_updated"), "info", "suit"); audio.line("route-home-updated", say("route_home_updated")); } })
+      .catch(() => { note(say("no_reroute"), "warning", "suit"); audio.line("no-reroute", say("no_reroute")); })
       .finally(() => setRerouting(false));
   }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
 

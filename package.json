@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:quest": "vite --mode quest",
+    "dev:vr": "vite --mode quest",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "lint": "oxlint",

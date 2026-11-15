@@ -36,6 +36,8 @@ import { EventsPanel } from "../dispatch/EventsPanel";
 import { crewAlerts, hasArea, outlook } from "../lib/hazards";
 import { conditions, eventLabel, isActive, useNow } from "../lib/mars";
 import { LanguageSwitcher } from "../components/LanguageSwitcher";
+import { LayerSwitcher } from "../components/LayerSwitcher";
+import { GLOBE_BASES, GLOBE_OVERLAYS, loadChoice, saveChoice, type LayerChoice } from "../lib/marsLayers";
 
 const Globe = lazy(() => import("../dispatch/Globe").then((m) => ({ default: m.Globe })));
 
@@ -47,6 +49,9 @@ export function Dispatch() {
   const select = (id: string | null) => setParams(id ? { crew: id } : {});
   const [adding, setAdding] = useState(false);
   const [raising, setRaising] = useState(false);
+  const [layers, setLayers] = useState<LayerChoice>(() => loadChoice("globe", { base: "viking", overlays: [] }, GLOBE_BASES, GLOBE_OVERLAYS));
+  const [layerStatus, setLayerStatus] = useState({ busy: false, error: false });
+  const chooseLayers = (c: LayerChoice) => { setLayers(c); saveChoice("globe", c); };
   const events = useEvents(), now = useNow();
   const evs = useMemo(() => events.data ?? [], [events.data]);
   const tele = useTelemetry();
@@ -71,7 +76,7 @@ export function Dispatch() {
     <div className="relative h-full overflow-hidden bg-[#07060a]">
       <div className="absolute inset-0">
         <Suspense fallback={<div className="grid h-full place-items-center text-sm text-muted-foreground">{t("dispatch.loading_globe")}</div>}>
-          <Globe crews={dots} hazards={hazards} solar={solar?.level ?? null} selected={selectedId} onSelect={select} />
+          <Globe crews={dots} hazards={hazards} solar={solar?.level ?? null} selected={selectedId} onSelect={select} layers={layers} onLayerStatus={setLayerStatus} />
         </Suspense>
       </div>
 
@@ -116,7 +121,11 @@ export function Dispatch() {
           </div>
         )}
 
-      <div className="pointer-events-none absolute right-4 bottom-4 hidden text-xs text-white/50 sm:block">{t("dispatch.globe_hint")}</div>
+      <div className="absolute right-4 bottom-4 flex items-center gap-3">
+        <span className="pointer-events-none hidden text-xs text-white/50 sm:block">{t("dispatch.globe_hint")}</span>
+        <LayerSwitcher up alignRight bases={GLOBE_BASES} overlays={GLOBE_OVERLAYS} value={layers} onChange={chooseLayers}
+          busy={layerStatus.busy} error={layerStatus.error} />
+      </div>
       <NewCrewDialog open={adding} onOpenChange={setAdding} onCreated={(c) => select(c.id)} />
       {raising && <EventDialog open onOpenChange={setRaising} crews={crews.data ?? []} source="dispatch" />}
     </div>

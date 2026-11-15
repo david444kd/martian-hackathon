@@ -6,17 +6,21 @@
 //  - a science work site at the route's target: an instrument tripod, a drill, sample flags, a cache;
 //  - layered sedimentary buttes (like those below Mount Sharp) around the zone, with talus.
 // Textures are drawn in code (textures.ts). None of these are surveyed objects. The bigger ones are
-// solid: the astronaut walks around them.
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+// solid: the astronaut walks around them. Each is built from many small parts and then welded into one
+// mesh per material (merge.tsx), so a whole outpost costs a headset a couple of dozen draw calls.
+import { memo, useEffect, useMemo, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import type { Heightmap } from "../lib/zones";
 import { groundY, slopeDeg, type P2, type Polyline } from "./frame";
 import type { Closed } from "./runtime";
+import { ATMO } from "./atmo";
+import { Merged } from "./merge";
+import { Q } from "./quality";
 import { foil, hull, label, patch, solar, strata, tyre } from "./textures";
 
-export const HAB_OFFSET = -9; // m north of the landing point: you start at the airlock door
+export const HAB_OFFSET = -12.5; // m north of the landing point: you start a few steps from the foot of the airlock ladder
 
 function makeMats() {
   const h = hull([4, 1]), h2 = hull([2, 1]), f = foil([6, 2]), f1 = foil([2, 2]), sp = solar([1, 1]), ty = tyre();
@@ -26,8 +30,8 @@ function makeMats() {
     hull: std({ map: h.map, normalMap: h.normalMap, roughnessMap: h.roughnessMap, roughness: 1, metalness: 0.1 }),
     hull2: std({ map: h2.map, normalMap: h2.normalMap, roughnessMap: h2.roughnessMap, roughness: 1, metalness: 0.1 }),
     white: std({ color: "#e6e1d6", roughness: 0.6, metalness: 0.05 }),
-    foil: std({ map: f.map, normalMap: f.normalMap, normalScale: new THREE.Vector2(1.4, 1.4), roughness: 0.32, metalness: 1 }),
-    foil1: std({ map: f1.map, normalMap: f1.normalMap, normalScale: new THREE.Vector2(1.4, 1.4), roughness: 0.3, metalness: 1 }),
+    foil: std({ map: f.map, normalMap: f.normalMap, normalScale: new THREE.Vector2(0.55, 0.55), roughness: 0.4, metalness: 0.9 }),
+    foil1: std({ map: f1.map, normalMap: f1.normalMap, normalScale: new THREE.Vector2(0.55, 0.55), roughness: 0.38, metalness: 0.9 }),
     metal: std({ color: "#aeb2b5", roughness: 0.32, metalness: 1 }),
     steel: std({ color: "#6d7275", roughness: 0.5, metalness: 0.9 }),
     dark: std({ color: "#22272a", roughness: 0.6, metalness: 0.4 }),
@@ -36,6 +40,8 @@ function makeMats() {
     lit: std({ color: "#1a1410", roughness: 0.15, metalness: 0.6, emissive: "#ffc98a", emissiveIntensity: 1.1 }),   // a window with the lights on inside
     orange: std({ color: "#d86f24", roughness: 0.55, metalness: 0.1 }),
     tyre: std({ map: ty.map, normalMap: ty.normalMap, normalScale: new THREE.Vector2(2, 2), roughness: 0.95, metalness: 0 }),
+    hatch: std({ color: "#c9c5bb", roughness: 0.5, metalness: 0.35 }),
+    yellow: std({ color: "#d9a514", roughness: 0.6, metalness: 0.1 }),
     lamp: new THREE.MeshBasicMaterial({ color: "#fff0cf" }),
     green: new THREE.MeshBasicMaterial({ color: "#6cff9a" }),
     red: new THREE.MeshBasicMaterial({ color: "#ff5a4a" }),
@@ -48,31 +54,48 @@ function useMats() {
   return m;
 }
 
-let glowTex: THREE.CanvasTexture | null = null;
-function glowTexture() {
-  if (glowTex) return glowTex;
-  const c = document.createElement("canvas"); c.width = c.height = 128;
-  const x = c.getContext("2d")!, g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
-  g.addColorStop(0, "rgba(255,255,255,1)"); g.addColorStop(0.2, "rgba(255,255,255,0.55)"); g.addColorStop(1, "rgba(255,255,255,0)");
-  x.fillStyle = g; x.fillRect(0, 0, 128, 128);
-  glowTex = new THREE.CanvasTexture(c);
-  return glowTex;
-}
-/** a lamp: a bright bead with a soft halo */
-function Lamp({ p, color = "#fff0cf", size = 0.1, halo = 1.4 }: { p: [number, number, number]; color?: string; size?: number; halo?: number }) {
-  return (
-    <group position={p}>
-      <mesh><sphereGeometry args={[size, 10, 8]} /><meshBasicMaterial color={color} /></mesh>
-      <sprite scale={[halo, halo, 1]}><spriteMaterial map={glowTexture()} color={color} transparent opacity={0.75} blending={THREE.AdditiveBlending} depthWrite={false} /></sprite>
-    </group>
-  );
-}
+/** a light: a small bright bead (welded in with the rest) and a soft glow round it (Halos) */
+interface Light { p: [number, number, number]; color: "lamp" | "green" | "red"; size: number; glow: number; blink?: boolean }
+const LIGHT: Record<Light["color"], string> = { lamp: "#fff0cf", green: "#6cff9a", red: "#ff4a3a" };
 
-/** everything inside casts and takes shadows */
-function Shadowed({ children, ...props }: { children: ReactNode } & Record<string, unknown>) {
-  const ref = useRef<THREE.Group>(null);
-  useEffect(() => { ref.current?.traverse((o) => { if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; } }); });
-  return <group ref={ref} {...props}>{children}</group>;
+/**
+ * The glow of every light of an object in one draw call: a quad per light, facing the eye. Faint in
+ * daylight; in dusty air the glows swell and carry further than the things they are fixed to, the way
+ * lamps show through fog.
+ */
+function Halos({ lights }: { lights: Light[] }) {
+  const mesh = useMemo(() => {
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]), 3));
+    g.setIndex([0, 1, 2, 0, 2, 3]);
+    const at = new Float32Array(lights.length * 3), col = new Float32Array(lights.length * 3), info = new Float32Array(lights.length * 2), c = new THREE.Color();
+    lights.forEach((l, i) => { at.set(l.p, i * 3); c.set(LIGHT[l.color]).toArray(col, i * 3); info[i * 2] = l.glow; info[i * 2 + 1] = l.blink ? 1 : 0; });
+    g.setAttribute("aAt", new THREE.InstancedBufferAttribute(at, 3));
+    g.setAttribute("aCol", new THREE.InstancedBufferAttribute(col, 3));
+    g.setAttribute("aInfo", new THREE.InstancedBufferAttribute(info, 2));
+    g.instanceCount = lights.length;
+    const m = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+      uniforms: { uStorm: ATMO.uStorm, uTime: ATMO.uTime, uFogDensity: ATMO.uFogDensity, uSun: ATMO.uSun },
+      vertexShader: /* glsl */ `attribute vec3 aAt, aCol; attribute vec2 aInfo; uniform float uStorm, uTime, uFogDensity; uniform vec3 uSun;
+        varying vec2 vQ; varying vec3 vC;
+        void main(){
+          vec4 mv = modelViewMatrix * vec4(aAt, 1.0);
+          float dusk = max(uStorm * sqrt(uStorm), 1.0 - smoothstep(0.1, 0.4, uSun.y)), d = length(mv.xyz);
+          float on = aInfo.y > 0.5 ? step(fract(uTime / 1.4), 0.5) : 1.0;
+          mv.xy += position.xy * aInfo.x * (1.0 + dusk * 1.5);
+          float k = uFogDensity * d * 0.4;
+          vC = aCol * on * (0.05 + 0.95 * dusk) * exp(-k * k); vQ = position.xy * 2.0;
+          gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: /* glsl */ `varying vec2 vQ; varying vec3 vC;
+        void main(){ float a = max(1.0 - length(vQ), 0.0); gl_FragColor = vec4(vC, a * a * a); }`,
+    });
+    const o = new THREE.Mesh(g, m);
+    o.frustumCulled = false; o.renderOrder = 45;
+    return o;
+  }, [lights]);
+  useEffect(() => () => { mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose(); }, [mesh]);
+  return <primitive object={mesh} />;
 }
 
 const rbox = (w: number, h: number, d: number, r: number) => new RoundedBoxGeometry(w, h, d, 4, r);
@@ -110,8 +133,21 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
     ]);
   }, [H.x, H.z]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const blink = useRef<THREE.Group>(null);
-  useFrame(({ clock }) => { if (blink.current) blink.current.visible = (clock.elapsedTime % 1.4) < 0.7; });
+  // every light of the outpost: airlock status and floods, the mast beacon, the pad's edge, the path, the rover's headlights
+  const lights = useMemo<Light[]>(() => {
+    const cy = Math.cos(ROVER.yaw), sy = Math.sin(ROVER.yaw), ry = g(ROVER.x, ROVER.z);
+    return [
+      { p: [0, 4.95, 5.47], color: "green", size: 0.06, glow: 0.7 },
+      { p: [-1.3, 4.3, 5.47], color: "lamp", size: 0.055, glow: 1 }, { p: [1.3, 4.3, 5.47], color: "lamp", size: 0.055, glow: 1 },
+      { p: [9, g(9, -13) + 15.2, -13], color: "red", size: 0.1, glow: 2.4, blink: true },
+      ...Array.from({ length: 12 }, (_, k): Light => {
+        const a = (k * Math.PI) / 6, px = Math.cos(a) * 10, pz = -36 + Math.sin(a) * 10;
+        return { p: [px, g(px, pz) + 0.25, pz], color: k % 3 ? "lamp" : "green", size: 0.06, glow: 0.8 };
+      }),
+      ...[10.5, 13, 15.5].flatMap((z) => [-1.7, 1.7].map((x): Light => ({ p: [x, g(x, z) + 0.63, z], color: "lamp", size: 0.04, glow: 0.5 }))),
+      ...[-0.75, 0.75].map((z): Light => ({ p: [ROVER.x + 2.43 * cy + z * sy, ry + 1.55, ROVER.z - 2.43 * sy + z * cy], color: "lamp", size: 0.07, glow: 1.1 })),
+    ];
+  }, [hm, H.x, H.z]); // eslint-disable-line react-hooks/exhaustive-deps
   const dish = useMemo(() => new THREE.LatheGeometry(Array.from({ length: 12 }, (_, i) => new THREE.Vector2((i / 11) * 1.5, ((i / 11) ** 2) * 0.55)), 36), []);
   const padTex = useMemo(() => {
     const c = document.createElement("canvas"); c.width = c.height = 512;
@@ -130,7 +166,8 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
 
   return (
     <group position={[H.x, y, H.z]}>
-      <Shadowed>
+      <Merged deps={[hm, H.x, H.z]}>
+        {lights.map((l, k) => <mesh key={`l${k}`} material={m[l.color]} position={l.p}><sphereGeometry args={[l.size, 8, 6]} /></mesh>)}
         {/* ---- descent stage: gold foil octagon on four legs */}
         <mesh material={m.foil} position={[0, 1.55, 0]}><cylinderGeometry args={[4.1, 3.7, 1.3, 8]} /></mesh>
         <mesh material={m.dark} position={[0, 0.72, 0]}><coneGeometry args={[1.1, 0.9, 20, 1, true]} /></mesh>
@@ -179,9 +216,17 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
         {/* ---- airlock towards the landing point (south): hatch, porch, ladder, handrails */}
         <mesh material={m.hull2} geometry={useMemo(() => rbox(2.3, 2.5, 2.4, 0.3), [])} position={[0, 3.45, 4.2]} />
         <mesh material={m.orange} position={[0, 4.6, 5.405]}><boxGeometry args={[1.9, 0.14, 0.02]} /></mesh>
-        <mesh material={m.dark} geometry={useMemo(() => rbox(1.15, 1.85, 0.08, 0.2), [])} position={[0, 3.35, 5.4]} />
-        <mesh material={m.metal} position={[0, 3.35, 5.44]}><torusGeometry args={[0.24, 0.03, 8, 24]} /></mesh>
-        <mesh material={m.lit} position={[0, 3.95, 5.445]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[0.17, 0.17, 0.02, 20]} /></mesh>
+        {/* the outer hatch: a frame, the door set into it, a window, the locking wheel with its spokes, hinges, hazard edging */}
+        <mesh material={m.dark} geometry={useMemo(() => rbox(1.34, 2.04, 0.06, 0.2), [])} position={[0, 3.35, 5.39]} />
+        <mesh material={m.hatch} geometry={useMemo(() => rbox(1.12, 1.82, 0.09, 0.18), [])} position={[0, 3.35, 5.41]} />
+        <mesh material={m.metal} position={[0, 3.9, 5.46]}><torusGeometry args={[0.2, 0.035, 8, 28]} /></mesh>
+        <mesh material={m.lit} position={[0, 3.9, 5.458]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[0.185, 0.185, 0.02, 24]} /></mesh>
+        <mesh material={m.steel} position={[0, 3.12, 5.5]}><torusGeometry args={[0.21, 0.022, 8, 28]} /></mesh>
+        {[0, 1, 2].map((k) => <mesh key={k} material={m.steel} position={[0, 3.12, 5.495]} rotation={[0, 0, (k * Math.PI) / 3]}><boxGeometry args={[0.42, 0.025, 0.02]} /></mesh>)}
+        <mesh material={m.metal} position={[0, 3.12, 5.48]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[0.05, 0.06, 0.07, 14]} /></mesh>
+        {[2.75, 3.95].map((h) => <mesh key={h} material={m.steel} position={[-0.6, h, 5.455]}><boxGeometry args={[0.1, 0.22, 0.05]} /></mesh>)}
+        <mesh material={m.yellow} position={[0, 2.5, 5.462]}><boxGeometry args={[0.9, 0.06, 0.012]} /></mesh>
+        <mesh position={[0, 2.68, 5.462]}><planeGeometry args={[0.7, 0.14]} /><meshStandardMaterial map={label("EVA HATCH", { color: "#2a2f33" })} transparent roughness={0.8} polygonOffset polygonOffsetFactor={-4} /></mesh>
         <mesh material={m.steel} position={[0, 2.3, 6.2]}><boxGeometry args={[2.2, 0.07, 1.6]} /></mesh>
         {[-1.05, 1.05].map((x) => (
           <group key={x}>
@@ -283,7 +328,7 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
         {/* ---- landing pad, north of the outpost */}
         <mesh position={[0, g(0, -36) + 0.06, -36]} rotation={[-Math.PI / 2, 0, 0]}><circleGeometry args={[10, 64]} /><meshStandardMaterial map={padTex} roughness={0.95} /></mesh>
 
-        <Rover m={m} at={[-8, g(-8, 12), 12]} yaw={0.55} />
+        <Rover m={m} at={[ROVER.x, g(ROVER.x, ROVER.z), ROVER.z]} yaw={ROVER.yaw} />
 
         {/* ---- a flag by the airlock */}
         <group position={[3.6, g(3.6, 8), 8]}>
@@ -291,26 +336,16 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
           <Strut a={[0, 2.95, 0]} b={[0.95, 2.95, 0]} r={0.012} material={m.metal} />
           <mesh position={[0.48, 2.62, 0]}><planeGeometry args={[0.92, 0.62, 8, 4]} /><meshStandardMaterial map={label("ARES", { color: "#f2efe6", bg: "#27508f", w: 256, h: 172 })} side={THREE.DoubleSide} roughness={0.9} /></mesh>
         </group>
-      </Shadowed>
-
-      {/* ---- lights (no shadows): airlock status, mast beacon, pad edge, the path to the landing point */}
-      <Lamp p={[0, 4.95, 5.45]} color="#6cff9a" size={0.09} halo={1.6} />
-      <Lamp p={[-1.3, 4.3, 5.45]} size={0.07} halo={2.2} />
-      <Lamp p={[1.3, 4.3, 5.45]} size={0.07} halo={2.2} />
-      <group ref={blink}><Lamp p={[9, g(9, -13) + 15.2, -13]} color="#ff4a3a" size={0.14} halo={3} /></group>
-      {Array.from({ length: 12 }, (_, k) => {
-        const a = (k * Math.PI) / 6, px = Math.cos(a) * 10, pz = -36 + Math.sin(a) * 10;
-        return <Lamp key={k} p={[px, g(px, pz) + 0.25, pz]} color={k % 3 ? "#fff0cf" : "#6cff9a"} size={0.08} halo={1.3} />;
-      })}
-      {[10, 12.5, 15].map((z) => [-1.7, 1.7].map((x) => (
-        <group key={`${x}${z}`} position={[x, g(x, z), z]}>
-          <mesh material={m.metal} position={[0, 0.3, 0]}><cylinderGeometry args={[0.02, 0.03, 0.6, 6]} /></mesh>
-          <Lamp p={[0, 0.63, 0]} size={0.05} halo={0.8} />
-        </group>
-      )))}
+        {[10.5, 13, 15.5].map((z) => [-1.7, 1.7].map((x) => (
+          <mesh key={`${x}${z}`} material={m.metal} position={[x, g(x, z) + 0.3, z]}><cylinderGeometry args={[0.02, 0.03, 0.6, 6]} /></mesh>
+        )))}
+      </Merged>
+      <Halos lights={lights} />
     </group>
   );
 });
+
+const ROVER = { x: -8, z: 12, yaw: 0.55 };
 
 /** a six-wheeled pressurised rover: rocker suspension, a windshield, roof radiator, two suitports at the back */
 function Rover({ m, at, yaw }: { m: Mats; at: [number, number, number]; yaw: number }) {
@@ -361,7 +396,6 @@ function Rover({ m, at, yaw }: { m: Mats; at: [number, number, number]; yaw: num
       <mesh material={m.dark} position={[0.9, 4.2, 0.7]}><boxGeometry args={[0.3, 0.2, 0.4]} /></mesh>
       <Strut a={[-1.9, 3.05, -0.8]} b={[-1.9, 4.4, -0.8]} r={0.015} material={m.metal} />
       <mesh position={[-0.5, 1.95, 1.19]}><planeGeometry args={[1.5, 0.36]} /><meshStandardMaterial map={label("ROVER 1", { color: "#1f2c36" })} transparent roughness={0.8} polygonOffset polygonOffsetFactor={-4} /></mesh>
-      {[-0.75, 0.75].map((z) => <Lamp key={z} p={[2.43, 1.55, z]} size={0.09} halo={1.8} />)}
     </group>
   );
 }
@@ -377,7 +411,7 @@ export const ScienceSite = memo(function ScienceSite({ hm, at }: { hm: Heightmap
   useEffect(() => () => box.dispose(), [box]);
   return (
     <group position={[at.x, y, at.z]}>
-      <Shadowed>
+      <Merged deps={[hm, at.x, at.z]}>
         {/* instrument tripod: a spectrometer head with a lens and a small panel */}
         <group position={[2, g(2, -1), -1]}>
           {[0, 1, 2].map((k) => <Strut key={k} a={[0, 1.45, 0]} b={[Math.cos((k * 2 * Math.PI) / 3) * 0.6, 0, Math.sin((k * 2 * Math.PI) / 3) * 0.6]} r={0.018} material={m.metal} />)}
@@ -407,7 +441,7 @@ export const ScienceSite = memo(function ScienceSite({ hm, at }: { hm: Heightmap
           <mesh material={m.orange} position={[0, 0.455, 0]}><boxGeometry args={[0.82, 0.03, 0.57]} /></mesh>
           {[-0.2, 0, 0.2].map((x) => <mesh key={x} material={m.metal} position={[x, 0.5, 0]}><cylinderGeometry args={[0.035, 0.035, 0.12, 10]} /></mesh>)}
         </group>
-      </Shadowed>
+      </Merged>
     </group>
   );
 });
@@ -435,7 +469,7 @@ function slab(seed: number, r: number, h: number) {
 
 interface Butte { id: number; x: number; z: number; r: number; layers: { y: number; h: number; r: number; seed: number; c: number; dx: number; dz: number }[]; yaw: number; y: number }
 
-const GRID = 300, SPAN = 3000, SHOW_M = 1300;
+const GRID = 300, SPAN = 3000, SHOW_M = Q.buttes;
 
 /** every butte of the zone near the outpost, on a fixed grid (so they never move when the route changes) */
 function allButtes(hm: Heightmap, home: P2): Butte[] {
@@ -498,12 +532,14 @@ export function Buttes({ hm, home, line, rt, onSolid }: { hm: Heightmap; home: P
         const gs = geo(b);
         return (
           <group key={b.id} position={[b.x, b.y, b.z]} rotation={[0, b.yaw, 0]}>
+           <Merged deps={[b.id]}>
             {b.layers.map((l, k) => <mesh key={k} geometry={gs[k]} material={mats[l.c]} position={[l.dx, l.y, l.dz]} castShadow receiveShadow />)}
             {/* fallen blocks at the foot */}
             {Array.from({ length: 6 }, (_, k) => {
               const a = hash(b.id, k + 200) * Math.PI * 2, d = b.r * (0.92 + hash(b.id, k + 300) * 0.4), s = 0.5 + hash(b.id, k + 400) * 1.5;
               return <mesh key={`t${k}`} geometry={talus} material={mats[(k + b.id) % 3]} position={[Math.cos(a) * d, s * 0.3 - 0.4, Math.sin(a) * d * 0.82]} rotation={[k, a, k * 0.5]} scale={[s, s * 0.7, s * 1.1]} castShadow receiveShadow />;
             })}
+           </Merged>
           </group>
         );
       })}

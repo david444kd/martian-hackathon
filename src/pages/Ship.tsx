@@ -30,6 +30,7 @@ import { EventDialog } from "../components/EventDialog";
 import { areaHazards, avoidList, crewAlerts, evaCheck, outlook, routeHit, type Avoid } from "../lib/hazards";
 import { conditions, eventLabel, useNow } from "../lib/mars";
 import { LanguageSwitcher } from "../components/LanguageSwitcher";
+import { DemoStormButton } from "../components/DemoStormButton";
 
 /** anomalies that matter for a route made now: active or starting within this many hours */
 const AVOID_AHEAD_H = 6;
@@ -334,6 +335,7 @@ function ShipMap({ zone, hm, crew, home, plans, sel, active, env, astro, start, 
         <ZoomControl position="bottomright" />
       </ZoneLeafletMap>
 
+      <DemoStormButton className="absolute top-3 right-3 z-[500]" crew={crew} zone={zone} plan={active ?? sel} at={astro.at} events={env.evs} now={env.now} />
       <div className="pointer-events-none absolute top-3 left-1/2 z-[500] -translate-x-1/2 rounded-full border bg-card/85 px-4 py-1.5 text-xs backdrop-blur">
         {sel ? t("ship.planning_title", { title: sel.title }) : t("ship.pick_plan_hint")}
       </div>

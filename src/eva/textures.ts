@@ -102,12 +102,12 @@ export const hull = (repeat: [number, number] = [3, 1]) => bake(`hull${repeat}`,
 
 /** multi-layer insulation: crinkled gold foil */
 export const foil = (repeat: [number, number] = [2, 2]) => bake(`foil${repeat}`, 256, (u, v) => {
-  // creases: ridged noise at two scales
-  const a = Math.abs(fbm(u, v, 6, 4) - 0.5) * 2, b = Math.abs(fbm(u + 0.37, v + 0.11, 14, 3) - 0.5) * 2;
-  const h = (1 - a) * 1.4 + (1 - b) * 0.7;
-  const k = 0.82 + (1 - a) * 0.3;
-  return { h, r: 214 * k, g: 162 * k, b: 62 * k };
-}, 5, repeat);
+  // creases: ridged noise at two scales, with flat facets between them
+  const a = Math.abs(fbm(u, v, 9, 4) - 0.5) * 2, b = Math.abs(fbm(u + 0.37, v + 0.11, 22, 3) - 0.5) * 2;
+  const h = Math.min(1, (1 - a) * 1.25) * 0.9 + (1 - b) * 0.45;
+  const k = 0.9 + (1 - a) * 0.16;
+  return { h, r: 226 * k, g: 168 * k, b: 74 * k };
+}, 2.4, repeat);
 
 /** solar cells: dark blue wafers in a grid with silver bus bars */
 export const solar = (repeat: [number, number] = [1, 1]) => bake(`solar${repeat}`, 256, (u, v) => {
@@ -145,13 +145,12 @@ export const strata = (seed = 0, repeat: [number, number] = [2, 1]) => bake(`str
   return { h, r: sat(tone * (0.74 + red * 0.16)) * 255, g: sat(tone * (0.47 + (1 - red) * 0.1)) * 255, b: sat(tone * (0.31 + (1 - red) * 0.07)) * 255, rough: 0.9 };
 }, 3.2, repeat, true);
 
-/** a boulder: pitted basalt with dust in the hollows */
+/** a rock's surface: pits and grain, near-white (the rock's own colours come from its vertices) */
 export const boulder = () => bake("boulder", 256, (u, v) => {
-  const n = fbm(u, v, 5, 5), pits = Math.pow(sat(1 - Math.abs(fbm(u + 0.5, v + 0.2, 12, 3) - 0.5) * 6), 2);
-  const dust = sat((n - 0.45) * 3);
-  const c = 0.5 + n * 0.5 - pits * 0.3;
-  return { h: n * 1.5 - pits, r: mix(120, 190, dust) * c, g: mix(84, 122, dust) * c, b: mix(64, 82, dust) * c };
-}, 3.5, [1, 1]);
+  const n = fbm(u, v, 5, 5), pits = Math.pow(sat(fbm(u + 0.5, v + 0.2, 18, 3) * 2.6 - 1.25), 1.5);
+  const c = 255 * sat(0.76 + n * 0.36 - pits * 0.3);
+  return { h: n * 1.5 - pits, r: c, g: c, b: c };
+}, 3.5, [2, 2]);
 
 /** lettering / a mission patch on a transparent canvas */
 export function label(text: string, opts: { color?: string; bg?: string; w?: number; h?: number; font?: string } = {}) {

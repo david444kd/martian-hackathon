@@ -1,55 +1,21 @@
-// The surface around the astronaut, beyond the zone's measured terrain and photo (astro/Scene.tsx):
-// the sky dome, sunlight, scattered rocks near your boots, the base habitat, the route's ground
-// markers, the target beacon and airborne dust in a storm. Rocks, the habitat and the dust are
-// authored visual dressing placed on the measured ground: not surveyed objects or weather data.
+// Things on the surface around the astronaut, beyond the measured ground (Ground.tsx) and the air
+// (atmo.tsx, Storm.tsx): scattered rocks near your boots, the route's ground markers and the target
+// beacon. The rocks are authored visual dressing placed on the measured ground: not surveyed objects.
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame, useThree } from "@react-three/fiber";
+import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import type { Heightmap } from "../lib/zones";
+import { air } from "./atmo";
 import { groundY, pointAlong, type P2, type Polyline } from "./frame";
+import { Q } from "./quality";
 import type { EvaRuntime } from "./runtime";
+import { boulder } from "./textures";
 
 // ------------------------------------------------------------------------------------------------
-// sky: butterscotch near the horizon, darker and browner overhead; a storm turns it all to murk
-const HORIZON = new THREE.Color("#d9a27a"), ZENITH = new THREE.Color("#8a5d48");
-const STORM_H = new THREE.Color("#7a5236"), STORM_Z = new THREE.Color("#4a3123");
-
-export function skyColors(storm: number) {
-  return { horizon: HORIZON.clone().lerp(STORM_H, storm), zenith: ZENITH.clone().lerp(STORM_Z, storm) };
-}
-
-export function Sky({ storm, sunDir }: { storm: number; sunDir: THREE.Vector3 }) {
-  const ref = useRef<THREE.Mesh>(null);
-  const mat = useMemo(() => new THREE.ShaderMaterial({
-    side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { horizon: { value: HORIZON.clone() }, zenith: { value: ZENITH.clone() }, sun: { value: new THREE.Vector3(0, 1, 0) }, storm: { value: 0 } },
-    vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
-    fragmentShader: `uniform vec3 horizon; uniform vec3 zenith; uniform vec3 sun; uniform float storm; varying vec3 vDir;
-      void main(){
-        float h = clamp(vDir.y, 0., 1.);
-        vec3 c = mix(horizon, zenith, pow(h, .55));
-        float s = max(dot(normalize(vDir), normalize(sun)), 0.);
-        // Mars' sunsets are blue around the Sun: a pale bluish-white glow, dimmed by dust
-        c += (vec3(.85,.9,1.) * pow(s, 900.) * 2.2 + vec3(.55,.62,.75) * pow(s, 24.) * .35) * (1. - storm * .85);
-        c = mix(c, horizon * .9, clamp(-vDir.y * 4., 0., 1.));
-        gl_FragColor = vec4(c, 1.);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }`,
-  }), []);
-  useEffect(() => () => mat.dispose(), [mat]);
-  useFrame(({ camera }) => {
-    const { horizon, zenith } = skyColors(storm);
-    mat.uniforms.horizon.value.copy(horizon); mat.uniforms.zenith.value.copy(zenith);
-    mat.uniforms.sun.value.copy(sunDir); mat.uniforms.storm.value = storm;
-    camera.getWorldPosition(ref.current!.position);
-  });
-  return <mesh ref={ref} material={mat} renderOrder={-10} frustumCulled={false}><sphereGeometry args={[30000, 48, 24]} /></mesh>;
-}
-
-// ------------------------------------------------------------------------------------------------
-// rocks: deterministic per 6 m cell, regenerated around the astronaut as they walk
-const CELL = 5, RADIUS = 80, MAX_ROCKS = 1800;
+// rocks: deterministic per 5 m cell, laid out again round the astronaut every 16 m they walk. Pebbles
+// are only drawn close by, stones further, boulders furthest: what a headset can see of each.
+const CELL = 5, MAX_SMALL = 420, MAX_BIG = 260;
 
 function hash(x: number, z: number, k: number) {
   let n = Math.imul(x | 0, 374761393) + Math.imul(z | 0, 668265263) + Math.imul(k, 1442695041);
@@ -57,60 +23,85 @@ function hash(x: number, z: number, k: number) {
   return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
 }
 
-function rockGeometry(seed: number) {
-  const g = new THREE.IcosahedronGeometry(1, 2);
-  const p = g.attributes.position as THREE.BufferAttribute, v = new THREE.Vector3();
+/**
+ * An angular rock: a lumpy ball with a few flat faces broken off it (wind-cut basalt), flattened where
+ * it sits in the regolith, dark on its sides and underneath, dusted orange on top.
+ */
+function rockGeometry(seed: number, detail: number) {
+  let g: THREE.BufferGeometry = new THREE.IcosahedronGeometry(1, detail);
+  g.deleteAttribute("normal");
+  const p = g.attributes.position as THREE.BufferAttribute, v = new THREE.Vector3(), n = new THREE.Vector3();
+  const cuts = Array.from({ length: 2 + (seed % 3) }, (_, k) => ({
+    n: new THREE.Vector3(hash(seed, k, 1) - 0.5, hash(seed, k, 2) * 0.9 - 0.25, hash(seed, k, 3) - 0.5).normalize(),
+    d: 0.62 + hash(seed, k, 4) * 0.3,
+  }));
   for (let i = 0; i < p.count; i++) {
     v.fromBufferAttribute(p, i);
-    // same displacement for vertices at the same place (the geometry is non-indexed): no cracks
-    const n = 0.78 + hash(Math.round(v.x * 4), Math.round(v.z * 4) + seed * 7, Math.round(v.y * 4)) * 0.38
-      + hash(Math.round(v.x * 9), Math.round(v.z * 9), Math.round(v.y * 9) + seed) * 0.1;
-    v.multiplyScalar(n);
-    v.y = v.y > 0 ? v.y * 0.78 : v.y * 0.4; // a bit flattened, sitting in the regolith
+    // the same push for vertices at the same place (the ball is not indexed): no cracks
+    const k = 0.74 + hash(Math.round(v.x * 2), Math.round(v.z * 2) + seed * 7, Math.round(v.y * 2)) * 0.4
+      + hash(Math.round(v.x * 8), Math.round(v.z * 8), Math.round(v.y * 8) + seed) * 0.08;
+    v.multiplyScalar(k);
+    for (const c of cuts) { const over = v.dot(c.n) - c.d; if (over > 0) v.addScaledVector(c.n, -over); }
+    v.y = v.y > 0 ? v.y * 0.8 : v.y * 0.35;
     p.setXYZ(i, v.x, v.y, v.z);
   }
+  g = mergeVertices(g, 1e-3);
   g.computeVertexNormals();
+  const pos = g.attributes.position, nor = g.attributes.normal, col = new Float32Array(pos.count * 3), c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    n.fromBufferAttribute(nor, i);
+    const dust = THREE.MathUtils.smoothstep(n.y, 0.25, 0.85) * (0.7 + hash(i, seed, 9) * 0.3);
+    const shade = 0.5 + 0.5 * THREE.MathUtils.smoothstep(pos.getY(i), -0.2, 0.35);  // darker towards the ground
+    c.setRGB((0.3 + dust * 0.24) * shade, (0.265 + dust * 0.14) * shade, (0.25 + dust * 0.07) * shade, THREE.SRGBColorSpace);
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  g.setAttribute("color", new THREE.BufferAttribute(col, 3));
   return g;
 }
 
 export function Rocks({ hm, rt, route }: { hm: Heightmap; rt: EvaRuntime; route: Polyline | null }) {
-  const geos = useMemo(() => [0, 1, 2].map(rockGeometry), []);
-  const mat = useMemo(() => new THREE.MeshStandardMaterial({ color: "#8b5d40", roughness: 0.96, metalness: 0, flatShading: true }), []);
+  // 0-2: pebbles and stones (80 triangles each); 3-4: boulders (320)
+  const geos = useMemo(() => [rockGeometry(1, 1), rockGeometry(2, 1), rockGeometry(3, 1), rockGeometry(4, 2), rockGeometry(5, 2)], []);
+  const mat = useMemo(() => {
+    const t = boulder();
+    return new THREE.MeshLambertMaterial({ map: t.map, normalMap: t.normalMap, normalScale: new THREE.Vector2(0.8, 0.8), vertexColors: true });
+  }, []);
   const refs = useRef<(THREE.InstancedMesh | null)[]>([]);
-  const last = useRef({ cx: NaN, cz: NaN, route: null as Polyline | null });
+  const last = useRef({ cx: NaN, cz: NaN, route: null as Polyline | null, solid: null as unknown });
   const o = useMemo(() => new THREE.Object3D(), []), c = useMemo(() => new THREE.Color(), []);
   useEffect(() => () => { geos.forEach((g) => g.dispose()); mat.dispose(); }, [geos, mat]);
 
   useFrame(() => {
     const cx = Math.round(rt.pose.x / 16), cz = Math.round(rt.pose.z / 16);
-    if (cx === last.current.cx && cz === last.current.cz && route === last.current.route) return;
-    last.current = { cx, cz, route };
-    const counts = [0, 0, 0];
-    const x0 = Math.floor((rt.pose.x - RADIUS) / CELL), x1 = Math.floor((rt.pose.x + RADIUS) / CELL);
-    const z0 = Math.floor((rt.pose.z - RADIUS) / CELL), z1 = Math.floor((rt.pose.z + RADIUS) / CELL);
+    if (cx === last.current.cx && cz === last.current.cz && route === last.current.route && rt.solid === last.current.solid) return;
+    last.current = { cx, cz, route, solid: rt.solid };
+    const counts = [0, 0, 0, 0, 0], [rPebble, rStone, rBoulder] = Q.rocks;
+    const x0 = Math.floor((rt.pose.x - rBoulder) / CELL), x1 = Math.floor((rt.pose.x + rBoulder) / CELL);
+    const z0 = Math.floor((rt.pose.z - rBoulder) / CELL), z1 = Math.floor((rt.pose.z + rBoulder) / CELL);
     for (let i = x0; i <= x1; i++) for (let j = z0; j <= z1; j++) {
       const k = Math.floor(hash(i, j, 1) * 4.2);
       for (let r = 0; r < k; r++) {
+        const big = hash(i, j, 30 + r) > 0.955;
+        const size = big ? 0.32 + hash(i, j, 40 + r) * 0.5 : 0.035 + hash(i, j, 40 + r) ** 2.4 * 0.27;
         const x = (i + hash(i, j, 10 + r)) * CELL, z = (j + hash(i, j, 20 + r)) * CELL;
-        if (Math.hypot(x - rt.pose.x, z - rt.pose.z) > RADIUS) continue;
-        if (rt.solid.some((c) => Math.hypot(x - c.x, z - c.z) < c.r + 1.5)) continue; // not inside buildings or buttes
-        const big = hash(i, j, 30 + r) > 0.965;
-        const size = big ? 0.35 + hash(i, j, 40 + r) * 0.45 : 0.04 + hash(i, j, 40 + r) ** 2.4 * 0.3;
+        const d = Math.hypot(x - rt.pose.x, z - rt.pose.z);
+        if (d > (big ? rBoulder : size > 0.11 ? rStone : rPebble)) continue;
+        if (rt.solid.some((s) => Math.hypot(x - s.x, z - s.z) < s.r + 1.5)) continue; // not inside buildings or buttes
         // keep the walking line clear of the bigger stones
         if (route && size > 0.2) {
           let near = false;
           for (let q = 0; q < route.pts.length - 1 && !near; q++) near = segDist(route.pts[q], route.pts[q + 1], { x, z }) < 2.5;
           if (near) continue;
         }
-        const v = Math.floor(hash(i, j, 50 + r) * 3), m = refs.current[v];
-        if (!m || counts[v] >= MAX_ROCKS) continue;
-        o.position.set(x, groundY(hm, x, z) - size * 0.12, z);
-        o.rotation.set((hash(i, j, 60 + r) - 0.5) * 0.5, hash(i, j, 70 + r) * Math.PI * 2, (hash(i, j, 80 + r) - 0.5) * 0.5);
-        o.scale.set(size * (0.8 + hash(i, j, 90 + r) * 0.6), size, size * (0.8 + hash(i, j, 95 + r) * 0.5));
+        const v = big ? 3 + Math.floor(hash(i, j, 50 + r) * 2) : Math.floor(hash(i, j, 50 + r) * 3), m = refs.current[v];
+        if (!m || counts[v] >= (big ? MAX_BIG : MAX_SMALL)) continue;
+        o.position.set(x, groundY(hm, x, z) - size * 0.08, z);
+        o.rotation.set((hash(i, j, 60 + r) - 0.5) * 0.4, hash(i, j, 70 + r) * Math.PI * 2, (hash(i, j, 80 + r) - 0.5) * 0.4);
+        o.scale.set(size * (0.8 + hash(i, j, 90 + r) * 0.7), size * (0.7 + hash(i, j, 93 + r) * 0.5), size * (0.8 + hash(i, j, 95 + r) * 0.5));
         o.updateMatrix();
         m.setMatrixAt(counts[v], o.matrix);
-        const shade = 0.72 + hash(i, j, 99 + r) * 0.45;
-        m.setColorAt(counts[v], c.setRGB(shade, shade * 0.97, shade * 0.93));
+        const shade = 0.78 + hash(i, j, 99 + r) * 0.4, warm = hash(i, j, 97 + r) * 0.07;
+        m.setColorAt(counts[v], c.setRGB(shade * (1 + warm), shade, shade * (1 - warm)));
         counts[v]++;
       }
     }
@@ -119,11 +110,11 @@ export function Rocks({ hm, rt, route }: { hm: Heightmap; rt: EvaRuntime; route:
       m.count = counts[v];
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
-      m.computeBoundingSphere();
     });
+    air.shadowDirty = true;
   });
 
-  return <>{geos.map((g, v) => <instancedMesh key={v} ref={(m) => { refs.current[v] = m; }} args={[g, mat, MAX_ROCKS]} frustumCulled={false} castShadow receiveShadow />)}</>;
+  return <>{geos.map((g, v) => <instancedMesh key={v} ref={(m) => { refs.current[v] = m; }} args={[g, mat, v < 3 ? MAX_SMALL : MAX_BIG]} frustumCulled={false} castShadow receiveShadow />)}</>;
 }
 
 function segDist(a: P2, b: P2, p: P2) {
@@ -241,99 +232,6 @@ export function Beacon({ hm, at, color, height = 4 }: { hm: Heightmap; at: P2; c
       </mesh>
       {/* a tall faint light column so it can be found from far away */}
       <mesh position={[0, 60, 0]}><cylinderGeometry args={[0.35, 0.35, 120, 8, 1, true]} /><meshBasicMaterial color={color} transparent opacity={0.22} depthWrite={false} side={THREE.DoubleSide} /></mesh>
-    </group>
-  );
-}
-
-// ------------------------------------------------------------------------------------------------
-/** airborne dust drifting past the visor; `storm` 0..1 */
-export function Dust({ storm, windDeg }: { storm: number; windDeg: number }) {
-  const N = 2600, BOX = 46, H = 16;
-  const ref = useRef<THREE.Points>(null);
-  const { geo, mat } = useMemo(() => {
-    const pos = new Float32Array(N * 3);
-    for (let i = 0; i < N; i++) { pos[i * 3] = (Math.random() - 0.5) * BOX; pos[i * 3 + 1] = Math.random() * H; pos[i * 3 + 2] = (Math.random() - 0.5) * BOX; }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    const mat = new THREE.PointsMaterial({ color: "#c89a72", size: 0.07, sizeAttenuation: true, transparent: true, opacity: 0, depthWrite: false, fog: false });
-    return { geo, mat };
-  }, []);
-  useEffect(() => () => { geo.dispose(); mat.dispose(); }, [geo, mat]);
-  const camPos = useMemo(() => new THREE.Vector3(), []);
-  const { gl } = useThree();
-  useFrame(({ camera, clock }, dt) => {
-    const pts = ref.current;
-    if (!pts) return;
-    mat.opacity = Math.min(0.85, storm * 0.95);
-    pts.visible = storm > 0.02;
-    if (!pts.visible) return;
-    (gl.xr.isPresenting ? gl.xr.getCamera() : camera).getWorldPosition(camPos);
-    const p = geo.attributes.position as THREE.BufferAttribute, a = p.array as Float32Array;
-    const w = (windDeg * Math.PI) / 180, speed = 4 + storm * 14, gust = 1 + Math.sin(clock.elapsedTime * 0.9) * 0.35;
-    const vx = Math.sin(w) * speed * gust * dt, vz = -Math.cos(w) * speed * gust * dt;
-    for (let i = 0; i < N; i++) {
-      a[i * 3] += vx + (Math.random() - 0.5) * 0.05; a[i * 3 + 2] += vz + (Math.random() - 0.5) * 0.05;
-      a[i * 3 + 1] += Math.sin(clock.elapsedTime * 2 + i) * 0.01 - 0.004;
-      // wrap around the viewer
-      const rx = a[i * 3] - camPos.x, rz = a[i * 3 + 2] - camPos.z;
-      if (rx > BOX / 2) a[i * 3] -= BOX; else if (rx < -BOX / 2) a[i * 3] += BOX;
-      if (rz > BOX / 2) a[i * 3 + 2] -= BOX; else if (rz < -BOX / 2) a[i * 3 + 2] += BOX;
-      const ry = a[i * 3 + 1] - (camPos.y - 2);
-      if (ry < 0) a[i * 3 + 1] += H; else if (ry > H) a[i * 3 + 1] -= H;
-    }
-    p.needsUpdate = true;
-  });
-  return <points ref={ref} geometry={geo} material={mat} frustumCulled={false} renderOrder={50} />;
-}
-
-// ------------------------------------------------------------------------------------------------
-/**
- * A dust storm (or a dust devil) seen from outside: a towering wall of dust over its area, churning
- * and drifting round, ragged at the top, with flashes inside. Inside it the fog and the Dust particles
- * take over. A picture of the anomaly's area from the `events` row, not a simulation of the air.
- */
-export function StormWall({ hm, at, radius, devil, level }: { hm: Heightmap; at: P2; radius: number; devil: boolean; level: string }) {
-  const height = devil ? Math.min(900, radius * 4) : Math.min(1400, 500 + radius * 0.5);
-  const mat = useMemo(() => new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false,
-    uniforms: { t: { value: 0 }, tint: { value: new THREE.Color(level === "critical" ? "#8a4a2c" : "#a8744c") }, devil: { value: devil ? 1 : 0 } },
-    vertexShader: `varying vec2 vUv; varying vec3 vP; uniform float t; uniform float devil;
-      void main(){ vUv = uv; vec3 p = position;
-        // the wall leans and bulges as it turns
-        float a = atan(p.z, p.x), k = 1. + .06 * sin(a * 3. + t * .3 + p.y * .004) + devil * .25 * sin(p.y * .02 - t * 2.);
-        p.xz *= k * mix(1., .55 + .45 * uv.y, devil);
-        vP = p; gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.); }`,
-    fragmentShader: `varying vec2 vUv; varying vec3 vP; uniform float t; uniform vec3 tint; uniform float devil;
-      float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
-        return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
-      float fbm(vec2 p){ float s = 0., a = .5; for(int i=0;i<5;i++){ s += noise(p)*a; p = p*2.03 + 7.; a *= .5; } return s; }
-      void main(){
-        float sp = mix(.02, .25, devil);
-        vec2 q = vec2(vUv.x * mix(14., 5., devil) + t * sp, vUv.y * 3. - t * .03);
-        float n = fbm(q + fbm(q * 1.7 - t * .02) * 1.3);
-        float top = smoothstep(1., .35 + n * .45, vUv.y);        // ragged top
-        float foot = smoothstep(0., .04, vUv.y);
-        float body = .5 + n * .6;
-        vec3 c = mix(tint * .55, tint * 1.5 + vec3(.12, .09, .05), n);
-        c += vec3(1., .9, .7) * step(.985, hash(vec2(floor(t * 3.), floor(vUv.x * 24.)))) * smoothstep(.5, .1, vUv.y) * .5; // a flash low in the wall
-        gl_FragColor = vec4(c, clamp(body * top * foot, 0., 1.) * mix(.86, .7, devil));
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }`,
-  }), [devil, level]);
-  useEffect(() => () => mat.dispose(), [mat]);
-  useFrame(({ clock }) => { mat.uniforms.t.value = clock.elapsedTime; });
-  const y = groundY(hm, at.x, at.z);
-  return (
-    <group position={[at.x, y - 20, at.z]}>
-      <mesh material={mat} position={[0, height / 2, 0]} renderOrder={6}>
-        <cylinderGeometry args={[radius, radius, height, 96, 24, true]} />
-      </mesh>
-      {/* a second, larger and fainter veil: depth */}
-      <mesh material={mat} position={[0, height * 0.42, 0]} rotation={[0, 1.3, 0]} scale={[1.12, 0.84, 1.12]} renderOrder={5}>
-        <cylinderGeometry args={[radius, radius, height, 64, 12, true]} />
-      </mesh>
     </group>
   );
 }

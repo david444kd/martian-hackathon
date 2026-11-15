@@ -13,6 +13,7 @@ import type { Heightmap } from "../lib/zones";
 import { bearingOf, groundY, inside, pointAlong, slopeDeg, type P2 } from "./frame";
 import type { EvaRuntime } from "./runtime";
 import i18n from "../i18n";
+import { wind } from "./wind";
 
 export const EYE = 1.68;
 const WALK = 1.3;      // m/s, a suited walk on Mars
@@ -282,7 +283,9 @@ export function Player({ hm, rt }: { hm: Heightmap; rt: EvaRuntime }) {
       if (n.speed > 0.2 && n.speed < 4) n.bob += dt * Math.min(2.2, n.speed) * 4.6; else n.bob *= 0.9;
       const amp = n.speed > 0.2 && n.speed < 4 ? 1 : 0;
       camera.position.set(Math.sin(n.bob * 0.5) * 0.018 * amp, EYE + Math.abs(Math.sin(n.bob)) * 0.03 * amp, 0);
-      camera.rotation.set(n.pitch, n.yaw, Math.sin(n.bob * 0.5) * 0.004 * amp, "YXZ");
+      // on a screen the wind buffets the view in a squall (never in the headset: the head is the user's own)
+      const buffet = wind.storm ** 3 * (0.25 + wind.gust + wind.squall), bt = performance.now() / 1000;
+      camera.rotation.set(n.pitch + Math.sin(bt * 23 + 1) * 0.0035 * buffet, n.yaw + Math.sin(bt * 17) * 0.003 * buffet, Math.sin(n.bob * 0.5) * 0.004 * amp + Math.sin(bt * 31) * 0.005 * buffet, "YXZ");
     }
 
     pose.x = p.x; pose.z = p.z; pose.y = gy;

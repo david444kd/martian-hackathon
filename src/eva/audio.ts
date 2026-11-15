@@ -3,8 +3,14 @@
 // suit, wind in a dust storm, radio tones before a call, the master alarm, and the call itself read
 // out in the interface language (English by default): a recorded human voice from public/voice/<lang>/ when there is one, else speech synthesis. Browsers allow sound only after a user gesture: `start()` is called from
 // the "Begin EVA" / "Enter VR" buttons. Mars' thin air carries almost no sound; this is the suit.
+// In a dust storm (wind.ts, written by the scene every frame) the helmet fills with it: a low rumble,
+// a howl and a thin whistle that rise with each gust, sand hissing and pattering on the visor, a thud
+// when a squall hits, the crackle of static discharges in the dust (Perseverance's microphone recorded
+// such discharges in dust devils and storm fronts), interference on the radio, harder breathing and
+// your own pulse. Loudness and character are dramatised for the demonstration, not measured.
 
 import i18n from "../i18n";
+import { wind } from "./wind";
 
 export type Tone = "info" | "warning" | "critical";
 
@@ -53,8 +59,21 @@ export class SuitAudio {
   private fan!: GainNode;
   private breath!: GainNode;
   private breathFilter!: BiquadFilterNode;
-  private wind!: GainNode;
-  private windFilter!: BiquadFilterNode;
+  private white!: AudioBuffer;
+  private motor!: OscillatorNode;
+  // the storm: rumble, howl, whistle, sand hiss, grit patter
+  private rumble!: GainNode;
+  private howl!: GainNode;
+  private howlFilter!: BiquadFilterNode;
+  private whistle!: GainNode;
+  private whistleFilter!: BiquadFilterNode;
+  private hiss!: GainNode;
+  private grit!: GainNode;
+  private gritSrc!: AudioBufferSourceNode;
+  private timer = 0;
+  private zaps = 0;
+  private inSquall = false;
+  private nextBeat = 0;
   private nextBreath = 0;
   private inhale = true;
   private nextStep = 0;
@@ -81,19 +100,35 @@ export class SuitAudio {
     this.ctx = ctx;
     this.master = ctx.createGain();
     this.master.gain.value = this.muted ? 0 : 0.9;
-    this.master.connect(ctx.destination);
+    // a limiter: the storm, an alarm and a call can all sound at once
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -12; limiter.knee.value = 8; limiter.ratio.value = 8; limiter.attack.value = 0.004; limiter.release.value = 0.2;
+    this.master.connect(limiter).connect(ctx.destination);
     // 4 s of brown-ish noise, looped by every continuous sound
     const len = ctx.sampleRate * 4, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
     let last = 0;
     for (let i = 0; i < len; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = last * 3.5; }
     this.noise = buf;
 
-    const loop = (filter: BiquadFilterNode, gain: GainNode) => {
+    // 2 s of white noise (hiss, clicks), and 3 s of separate grains striking the visor
+    const wlen = ctx.sampleRate * 2, white = ctx.createBuffer(1, wlen, ctx.sampleRate), w = white.getChannelData(0);
+    for (let i = 0; i < wlen; i++) w[i] = Math.random() * 2 - 1;
+    this.white = white;
+    const plen = ctx.sampleRate * 3, patter = ctx.createBuffer(1, plen, ctx.sampleRate), pd = patter.getChannelData(0);
+    for (let k = 0; k < 420; k++) {
+      const at = Math.floor(Math.random() * (plen - 600)), n = Math.floor(ctx.sampleRate * (0.0015 + Math.random() * 0.006)), amp = Math.random() ** 2.2;
+      for (let i = 0; i < n; i++) pd[at + i] += (Math.random() * 2 - 1) * amp * Math.exp((-5 * i) / n);
+    }
+
+    const loop = (filter: BiquadFilterNode, gain: GainNode, buffer: AudioBuffer = buf) => {
       const src = ctx.createBufferSource();
-      src.buffer = buf; src.loop = true; src.loopStart = Math.random();
+      src.buffer = buffer; src.loop = true; src.loopStart = Math.random();
       src.connect(filter).connect(gain).connect(this.master);
       src.start();
+      return src;
     };
+    const filter = (type: BiquadFilterType, freq: number, q = 0.7) => { const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q; return f; };
+    const silent = () => { const g = ctx.createGain(); g.gain.value = 0; return g; };
     // life-support fan: low steady hum + a faint motor tone
     const fanF = ctx.createBiquadFilter(); fanF.type = "lowpass"; fanF.frequency.value = 420;
     this.fan = ctx.createGain(); this.fan.gain.value = 0.16;
@@ -101,24 +136,80 @@ export class SuitAudio {
     const motor = ctx.createOscillator(), mg = ctx.createGain();
     motor.frequency.value = 118; motor.type = "triangle"; mg.gain.value = 0.006;
     motor.connect(mg).connect(this.master); motor.start();
+    this.motor = motor;
     // breathing: band-passed noise, swelled in and out by `update`
     this.breathFilter = ctx.createBiquadFilter(); this.breathFilter.type = "bandpass"; this.breathFilter.frequency.value = 900; this.breathFilter.Q.value = 0.7;
     this.breath = ctx.createGain(); this.breath.gain.value = 0;
     loop(this.breathFilter, this.breath);
-    // wind on the suit in a storm
-    this.windFilter = ctx.createBiquadFilter(); this.windFilter.type = "bandpass"; this.windFilter.frequency.value = 380; this.windFilter.Q.value = 0.9;
-    this.wind = ctx.createGain(); this.wind.gain.value = 0;
-    loop(this.windFilter, this.wind);
+    // the storm on the suit (levels set by weather())
+    loop(filter("lowpass", 95), (this.rumble = silent()));
+    loop((this.howlFilter = filter("bandpass", 300, 4.5)), (this.howl = silent()));
+    loop((this.whistleFilter = filter("bandpass", 1100, 24)), (this.whistle = silent()), white);
+    loop(filter("highpass", 3200), (this.hiss = silent()), white);
+    this.gritSrc = loop(filter("highpass", 2400), (this.grit = silent()), patter);
+    this.timer = window.setInterval(() => this.weather(), 50);
   }
 
-  /** every frame or so: breathing paced by the suit, footsteps while walking, wind with the storm */
-  update(respPerMin: number, exertion: number, moving: boolean, speed: number, storm: number) {
+  /** 20 times a second: the storm's sounds follow the gusts the scene is drawing */
+  private weather() {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== "running") return;
+    const t = ctx.currentTime, s = wind.storm, g = wind.gust, q = wind.squall, s2 = s * s, s3 = s2 * s;
+    const to = (p: AudioParam, v: number, tc = 0.25) => p.setTargetAtTime(v, t, tc);
+    to(this.rumble.gain, s2 * 0.55 + q * 0.5, 0.4);
+    to(this.howl.gain, s2 * (0.14 + g * 0.42) + q * 0.2);
+    to(this.howlFilter.frequency, 230 + g * 420 + q * 330 + Math.sin(t * 0.7) * 40);
+    to(this.whistle.gain, s3 * (g * g * 0.5 + q * 0.6), 0.35);
+    to(this.whistleFilter.frequency, 850 + g * 700 + q * 500 + Math.sin(t * 1.3) * 90, 0.3);
+    to(this.hiss.gain, s3 * (0.012 + g * 0.045 + q * 0.07));
+    to(this.grit.gain, s3 * (0.06 + g * 0.3 + q * 0.45), 0.15);
+    to(this.gritSrc.playbackRate, 0.75 + g * 0.6 + q * 0.5, 0.3);
+    to(this.motor.frequency, 118 + s3 * 16 + q * 10, 0.6);   // the fan works harder against the dust
+    // a squall arriving thumps the suit
+    if (q > 0.45 && !this.inSquall) {
+      this.inSquall = true;
+      this.burst(t, 0.55, "lowpass", 130, 0.9);
+      this.sweep(t, 62, 34, 0.6, 0.5);
+    } else if (q < 0.15) this.inSquall = false;
+    if (wind.zaps !== this.zaps) { this.zaps = wind.zaps; this.crackle(t); }
+  }
+
+  /** a static discharge nearby: a sharp snap, a few smaller ones, a fizz on the radio */
+  private crackle(t: number) {
+    const n = 2 + Math.floor(Math.random() * 4);
+    let at = t;
+    for (let k = 0; k < n; k++) {
+      this.burst(at, 0.004 + Math.random() * 0.016, "highpass", 1500 + Math.random() * 2500, (k ? 0.1 : 0.3) * (0.6 + Math.random() * 0.6), this.white);
+      at += 0.008 + Math.random() * 0.05;
+    }
+    this.burst(t + 0.01, 0.09, "bandpass", 2600, 0.07, this.white);
+  }
+
+  private sweep(at: number, from: number, to: number, dur: number, gain: number) {
+    const ctx = this.ctx!, o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(from, at); o.frequency.exponentialRampToValueAtTime(to, at + dur);
+    g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(gain, at + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    o.connect(g).connect(this.master);
+    o.start(at); o.stop(at + dur + 0.02);
+  }
+
+  /** twice a second: breathing paced by the suit, footsteps while walking, the pulse you hear when it is bad */
+  update(respPerMin: number, exertion: number, moving: boolean, speed: number, storm: number, pulse = 80) {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== "running") return;
     const t = ctx.currentTime;
+    // deep in the dust you breathe harder and hear your own heart
+    const fear = Math.min(1, Math.max(0, (storm - 0.55) / 0.35));
+    if (fear <= 0) this.nextBeat = t;
+    else while (this.nextBeat < t + 0.6) {
+      const at = Math.max(t, this.nextBeat), level = fear * (0.75 + wind.squall * 0.5);
+      this.burst(at, 0.1, "lowpass", 110, 0.5 * level); this.sweep(at, 92, 60, 0.11, 0.2 * level);
+      this.burst(at + 0.14, 0.08, "lowpass", 140, 0.3 * level); this.sweep(at + 0.14, 108, 72, 0.08, 0.12 * level);
+      this.nextBeat = at + 60 / Math.min(150, Math.max(50, pulse + fear * 22));
+    }
     if (t >= this.nextBreath) {
-      const period = 60 / Math.max(8, respPerMin), half = this.inhale ? period * 0.42 : period * 0.58;
-      const peak = (this.inhale ? 0.05 : 0.075) * (0.55 + exertion * 0.9);
+      const period = 60 / (Math.max(8, respPerMin) * (1 + fear * 0.35)), half = this.inhale ? period * 0.42 : period * 0.58;
+      const peak = (this.inhale ? 0.05 : 0.075) * (0.55 + exertion * 0.9) * (1 + fear * 0.7);
       const g = this.breath.gain;
       g.cancelScheduledValues(t);
       g.setValueAtTime(g.value, t);
@@ -132,19 +223,18 @@ export class SuitAudio {
       this.step(Math.min(1, speed / 2));
       this.nextStep = t + Math.max(0.28, 0.62 / Math.max(0.6, Math.min(2.2, speed)));
     }
-    this.wind.gain.setTargetAtTime(storm * 0.5, t, 0.8);
-    this.windFilter.frequency.setTargetAtTime(300 + storm * 260 + Math.sin(t * 0.7) * 90 * storm, t, 0.5);
     this.fan.gain.setTargetAtTime(0.14 + exertion * 0.05, t, 1);
   }
 
-  private burst(at: number, dur: number, type: BiquadFilterType, freq: number, gain: number) {
+  private burst(at: number, dur: number, type: BiquadFilterType, freq: number, gain: number, buffer: AudioBuffer = this.noise) {
     const ctx = this.ctx!, src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
-    src.buffer = this.noise; f.type = type; f.frequency.value = freq;
+    src.buffer = buffer; f.type = type; f.frequency.value = freq;
     g.gain.setValueAtTime(0.0001, at);
-    g.gain.exponentialRampToValueAtTime(gain, at + 0.012);
+    g.gain.exponentialRampToValueAtTime(Math.max(gain, 0.0002), at + Math.min(0.012, dur * 0.3));
     g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
     src.connect(f).connect(g).connect(this.master);
-    src.start(at, Math.random() * 3, dur + 0.05);
+    src.loop = dur > buffer.duration - 0.3;
+    src.start(at, Math.random() * Math.max(0, buffer.duration - dur - 0.1), dur + 0.05);
   }
 
   private beep(at: number, freq: number, dur: number, gain: number, type: OscillatorType = "sine") {
@@ -171,6 +261,7 @@ export class SuitAudio {
     if (!ctx || ctx.state !== "running") return;
     const t = ctx.currentTime;
     this.burst(t, 0.08, "highpass", 2500, 0.12);
+    if (wind.storm > 0.5) this.crackle(t + 0.05);   // the dust is on the link too
     this.beep(t + 0.1, 2525, 0.22, 0.08);
     this.beep(t + 0.36, 2475, 0.22, 0.08);
   }
@@ -215,6 +306,8 @@ export class SuitAudio {
       src.connect(hp).connect(lp).connect(sh).connect(g).connect(this.master);
       const t = ctx.currentTime;
       this.burst(t, 0.06, "highpass", 2500, 0.08);
+      // in a storm the voice comes through static
+      if (wind.storm > 0.4) this.burst(t + 0.05, buf.duration, "bandpass", 2100, 0.05 * wind.storm, this.white);
       src.start(t + 0.05);
       src.onended = () => this.burst(ctx.currentTime, 0.09, "highpass", 2200, 0.1); // squelch tail
     });
@@ -236,6 +329,7 @@ export class SuitAudio {
   }
 
   dispose() {
+    clearInterval(this.timer);
     window.speechSynthesis?.cancel();
     void this.ctx?.close().catch(() => {});
     this.ctx = null;

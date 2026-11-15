@@ -10,7 +10,9 @@ import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import type { EvaRuntime } from "./runtime";
+import { XR_PREVIEW } from "./xrPreview";
 import { fabric, foil, patch, rubber } from "./textures";
+import { mergeStatic } from "./merge";
 
 interface Mats { fabric: THREE.Material; pad: THREE.Material; rubber: THREE.Material; ring: THREE.Material; red: THREE.Material; dark: THREE.Material; foil: THREE.Material; ghost: THREE.Material }
 
@@ -31,7 +33,7 @@ function materials(): Mats {
 
 const mesh = (g: THREE.BufferGeometry, m: THREE.Material, x = 0, y = 0, z = 0) => { const o = new THREE.Mesh(g, m); o.position.set(x, y, z); return o; };
 /** a capsule lying along Z, from z = 0 to z = -len (rounded ends beyond) */
-const bone = (r: number, len: number, m: THREE.Material) => { const o = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 5, 12), m); o.rotation.x = Math.PI / 2; o.position.z = -len / 2; return o; };
+const bone = (r: number, len: number, m: THREE.Material) => { const o = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 3, 9), m); o.rotation.x = Math.PI / 2; o.position.z = -len / 2; return o; };
 
 /** one finger: three phalanges, each bent by `curl`, bellows at the joints, a silicone tip */
 function finger(m: Mats, len: number, r: number, curl: [number, number, number]) {
@@ -41,7 +43,7 @@ function finger(m: Mats, len: number, r: number, curl: [number, number, number])
   for (let k = 0; k < 3; k++) {
     const j = new THREE.Group(); j.rotation.x = -curl[k]; parent.add(j);
     j.add(bone(r * (1 - k * 0.07), L[k], k === 2 ? m.rubber : m.fabric));
-    const joint = new THREE.Mesh(new THREE.TorusGeometry(r * 0.98, r * 0.24, 6, 16), m.pad); j.add(joint);
+    const joint = new THREE.Mesh(new THREE.TorusGeometry(r * 0.98, r * 0.24, 5, 10), m.pad); j.add(joint);
     const next = new THREE.Group(); next.position.z = -L[k]; j.add(next); parent = next;
   }
   return root;
@@ -56,7 +58,7 @@ function hand(m: Mats, inner: 1 | -1) {
   const lens = [0.076, 0.086, 0.08, 0.062], rad = [0.0128, 0.0132, 0.0126, 0.0112];
   for (let f = 0; f < 4; f++) {
     const x = inner * (0.034 - f * 0.0225);                                   // index next to the thumb
-    g.add(mesh(new THREE.SphereGeometry(rad[f] * 1.22, 12, 10), m.pad, x, 0.006, -0.105)); // knuckle
+    g.add(mesh(new THREE.SphereGeometry(rad[f] * 1.22, 8, 6), m.pad, x, 0.006, -0.105)); // knuckle
     const fg = finger(m, lens[f], rad[f], [0.3 + f * 0.07, 0.5 + f * 0.06, 0.32]);
     fg.position.set(x, 0, -0.106); fg.rotation.y = inner * (0.07 - f * 0.05);  // slightly spread
     g.add(fg);
@@ -74,32 +76,32 @@ function hand(m: Mats, inner: 1 | -1) {
   return g;
 }
 
-const tube = (rFar: number, rNear: number, len: number, m: THREE.Material, z: number, seg = 28) => {
+const tube = (rFar: number, rNear: number, len: number, m: THREE.Material, z: number, seg = 22) => {
   // along Z: radius rFar at z (the wrist side), rNear at z + len (towards the elbow)
-  const o = new THREE.Mesh(new THREE.CylinderGeometry(rNear, rFar, len, seg, 4, true), m);
+  const o = new THREE.Mesh(new THREE.CylinderGeometry(rNear, rFar, len, seg, 1, true), m);
   o.rotation.x = Math.PI / 2; o.position.z = z + len / 2;
   return o;
 };
 
-/** hand + wrist disconnect + forearm sleeve of length `len` (towards +Z) */
-function arm(m: Mats, inner: 1 | -1, len: number, extra?: THREE.Object3D) {
+/** hand + wrist disconnect + forearm sleeve of length `len` (towards +Z) with `folds` restraint folds */
+function arm(m: Mats, inner: 1 | -1, len: number, extra?: THREE.Object3D, folds = 5) {
   const g = new THREE.Group();
   const h = hand(m, inner); h.scale.set(1.06, 1.06, 1.06); g.add(h);
   g.add(tube(0.045, 0.053, 0.06, m.fabric, 0.004));                    // gauntlet
-  for (const z of [0.022, 0.044]) { const strap = new THREE.Mesh(new THREE.TorusGeometry(0.0495 + (z - 0.022) * 0.13, 0.0035, 6, 28), m.pad); strap.position.z = z; g.add(strap); }
-  g.add(tube(0.057, 0.057, 0.014, m.red, 0.064, 36));                  // glove-side ring
-  g.add(tube(0.0605, 0.0605, 0.016, m.ring, 0.078, 36));               // suit-side ring
-  for (const z of [0.064, 0.078, 0.094]) { const lip = new THREE.Mesh(new THREE.TorusGeometry(0.059, 0.003, 6, 36), m.ring); lip.position.z = z; g.add(lip); }
+  for (const z of [0.022, 0.044]) { const strap = new THREE.Mesh(new THREE.TorusGeometry(0.0495 + (z - 0.022) * 0.13, 0.0035, 5, 22), m.pad); strap.position.z = z; g.add(strap); }
+  g.add(tube(0.057, 0.057, 0.014, m.red, 0.064, 28));                  // glove-side ring
+  g.add(tube(0.0605, 0.0605, 0.016, m.ring, 0.078, 28));               // suit-side ring
+  for (const z of [0.064, 0.078, 0.094]) { const lip = new THREE.Mesh(new THREE.TorusGeometry(0.059, 0.003, 5, 28), m.ring); lip.position.z = z; g.add(lip); }
   g.add(mesh(new THREE.BoxGeometry(0.02, 0.01, 0.022), m.red, 0, 0.062, 0.079));  // lock tab
   g.add(tube(0.058, 0.082, len, m.fabric, 0.094));                     // sleeve
-  for (let k = 1; k <= 5; k++) {                                       // soft restraint folds
-    const t = k / 6, r = 0.058 + t * 0.024;
-    const fold = new THREE.Mesh(new THREE.TorusGeometry(r + 0.001, 0.0045 + (k % 2) * 0.002, 6, 28), m.fabric);
+  for (let k = 1; k <= folds; k++) {                                   // soft restraint folds
+    const t = k / (folds + 1), r = 0.058 + t * 0.024;
+    const fold = new THREE.Mesh(new THREE.TorusGeometry(r + 0.001, 0.0045 + (k % 2) * 0.002, 5, 22), m.fabric);
     fold.position.z = 0.094 + len * t; fold.rotation.x = (k % 2 ? 0.06 : -0.05); g.add(fold);
   }
   if (extra) g.add(extra);
-  g.traverse((o) => { o.castShadow = false; });
-  return g;
+  // ~60 small parts → one mesh per material: a glove is in view all the time, in both eyes
+  return mergeStatic(g, { cast: false, receive: false });
 }
 
 /** a small canvas screen */
@@ -113,9 +115,9 @@ function display(w: number, h: number, px: number) {
 }
 
 /** the cuff display strapped on the left forearm */
-function cuff(m: Mats, screen: THREE.Mesh) {
+function cuff(m: Mats, screen: THREE.Mesh, z = 0.2) {
   const g = new THREE.Group();
-  g.position.set(0, 0.072, 0.2); g.rotation.x = 0.07;
+  g.position.set(0, 0.072, z); g.rotation.x = 0.07;
   g.add(mesh(new RoundedBoxGeometry(0.086, 0.014, 0.058, 3, 0.005), m.dark));
   screen.rotation.x = -Math.PI / 2; screen.position.y = 0.0075; g.add(screen);
   for (const z of [-0.022, 0.022]) { const s = new THREE.Mesh(new THREE.TorusGeometry(0.072, 0.004, 6, 28), m.dark); s.position.set(0, -0.072, z); s.scale.set(1, 1, 2.2); g.add(s); }
@@ -123,16 +125,18 @@ function cuff(m: Mats, screen: THREE.Mesh) {
 }
 
 /** the mission patch sewn on the right sleeve */
-function sleevePatch() {
+function sleevePatch(z = 0.24) {
   const p = new THREE.Mesh(new THREE.CircleGeometry(0.032, 28), new THREE.MeshStandardMaterial({ map: patch(), roughness: 0.9 }));
-  p.rotation.x = -Math.PI / 2 + 0.06; p.position.set(0, 0.0735, 0.24);
+  p.rotation.x = -Math.PI / 2 + 0.06; p.position.set(0, 0.0735, z);
   return p;
 }
 
-/** point an arm: wrist at `at`, fingers towards `to`, rolled about its own axis */
+/** point an arm: wrist at `at`, fingers towards `to` (both in the view's own frame), rolled about its own axis */
+const AIM = new THREE.Matrix4();
 function aim(g: THREE.Object3D, at: THREE.Vector3, to: THREE.Vector3, roll: number) {
   g.position.copy(at);
-  g.lookAt(at.clone().multiplyScalar(2).sub(to)); // an Object3D's +Z looks at the target: aim -Z instead
+  // not Object3D.lookAt: that takes a point in the world, and the arms hang in the camera's frame
+  g.quaternion.setFromRotationMatrix(AIM.lookAt(at, to, g.up)); // -Z (the fingers) towards `to`
   g.rotateZ(roll);
 }
 
@@ -154,8 +158,8 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
       r: { at: new THREE.Vector3(0.23, -0.245, -0.46), to: new THREE.Vector3(0.11, -0.11, -0.9), roll: -0.35 },
     };
     const screenArms = new THREE.Group(); screenArms.add(left, right);
-    // --- VR: a glove with a short sleeve on each controller
-    const xrL = arm(m, 1, 0.24, cuff(m, wristXr.mesh)), xrR = arm(m, -1, 0.24, sleevePatch());
+    // --- VR: a glove with a short sleeve on each controller (short and with few folds: it is close to the eyes)
+    const xrL = arm(m, 1, 0.15, cuff(m, wristXr.mesh, 0.17), 2), xrR = arm(m, -1, 0.15, sleevePatch(0.19), 2);
 
     // --- the body, in the world under your head
     const body = new THREE.Group();
@@ -175,9 +179,9 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
     const waist = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.02, 8, 36), m.ring); waist.rotation.x = Math.PI / 2; waist.position.set(0, 0.96, 0.05); waist.scale.set(1, 0.8, 1); body.add(waist);
     // legs: hip → knee → boot, swung while walking
     const leg = (s: 1 | -1) => {
-      const hip = new THREE.Group(); hip.position.set(s * 0.115, 0.92, 0.04);
+      const hip = new THREE.Group(); hip.position.set(s * 0.115, 0.92, 0.04); hip.userData.joint = true;
       const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.34, 6, 16), m.fabric); thigh.position.y = -0.2; hip.add(thigh);
-      const knee = new THREE.Group(); knee.position.y = -0.42; hip.add(knee);
+      const knee = new THREE.Group(); knee.position.y = -0.42; knee.userData.joint = true; hip.add(knee);
       knee.add(mesh(new THREE.SphereGeometry(0.088, 14, 12), m.pad));
       const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.078, 0.3, 6, 16), m.fabric); shin.position.y = -0.2; knee.add(shin);
       const ankle = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.014, 8, 28), m.ring); ankle.rotation.x = Math.PI / 2; ankle.position.y = -0.37; knee.add(ankle);
@@ -191,7 +195,7 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
     body.add(mesh(new THREE.SphereGeometry(0.19, 16, 12), m.ghost, 0, 1.66, 0.02));
     body.add(mesh(new RoundedBoxGeometry(0.52, 0.8, 0.24, 2, 0.05), m.ghost, 0, 1.28, 0.32));
     for (const s of [-1, 1]) { const ua = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.5, 4, 10), m.ghost); ua.position.set(s * 0.33, 1.1, -0.02); ua.rotation.set(0.25, 0, s * 0.12); body.add(ua); }
-    body.traverse((o) => { o.castShadow = true; o.receiveShadow = false; });
+    mergeStatic(body, { cast: true, receive: false }); // the legs stay jointed (hip, knee)
     return { screenArms, left, right, rest, xrL, xrR, body, legL, legR };
   }, [m, wrist, wristXr, chest]);
 
@@ -201,11 +205,19 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
     scene.add(parts.body);
     const attach = (c: THREE.Object3D) => (e: { data?: XRInputSource }) => {
       const g = e.data?.handedness === "left" ? parts.xrL : parts.xrR;
-      g.rotation.set(-0.55, 0, 0); g.position.set(0, -0.02, 0.07);
+      // the wrist just behind and below the grip; the forearm runs back and DOWN towards the elbow
+      g.rotation.set(0.5, 0, 0); g.position.set(0, -0.035, 0.06);
       c.add(g);
     };
     const handlers = controllers.map((c) => { const h = attach(c); c.addEventListener("connected", h); return h; });
+    // desktop preview of the headset view: stand-in controllers where hands usually hold them
+    const stand = XR_PREVIEW ? ([["left", -0.19], ["right", 0.19]] as const).map(([hand, x]) => {
+      const c = new THREE.Group(); c.position.set(x, -0.24, -0.5); c.rotation.set(-0.15, -x * 0.6, 0);
+      camera.add(c); attach(c)({ data: { handedness: hand } as XRInputSource });
+      return c;
+    }) : [];
     return () => {
+      stand.forEach((c) => camera.remove(c));
       camera.remove(parts.screenArms); scene.remove(parts.body);
       controllers.forEach((c, i) => { c.removeEventListener("connected", handlers[i]); c.remove(parts.xrL, parts.xrR); });
     };
@@ -214,7 +226,7 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
   const s = useRef({ t: 1, phase: 0, amp: 0, yaw: 0, first: true });
   const v = useMemo(() => ({ p: new THREE.Vector3(), f: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3() }), []);
   useFrame((_, dt) => {
-    const xr = gl.xr.isPresenting, st = s.current, walking = rt.pose.moving && rt.pose.speed < 4;
+    const xr = gl.xr.isPresenting || XR_PREVIEW, st = s.current, walking = rt.pose.moving && rt.pose.speed < 4;
     st.amp += ((walking ? 1 : 0) - st.amp) * Math.min(1, dt * 5);
     st.phase += dt * Math.min(2.2, Math.max(0.6, rt.pose.speed)) * 4.6 * (rt.pose.moving ? 1 : 0);
     const sw = Math.sin(st.phase) * st.amp, cw = Math.cos(st.phase) * st.amp, breathe = Math.sin(performance.now() / 1700) * 0.004;
@@ -228,7 +240,7 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
     }
 
     // the body under the head, turning with it lazily
-    const cam = xr ? gl.xr.getCamera() : camera;
+    const cam = gl.xr.isPresenting ? gl.xr.getCamera() : camera;
     cam.getWorldPosition(v.p); cam.getWorldDirection(v.f);
     const yaw = Math.atan2(-v.f.x, -v.f.z);
     if (st.first) { st.yaw = yaw; st.first = false; }

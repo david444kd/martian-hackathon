@@ -2,6 +2,7 @@
 //   /dispatch          Mission Control (dispatcher's admin)
 //   /ship/:crewId      Ship Console (the crew's window on the ship)
 //   /helmet/:crewId    EVA Helmet (Meta Quest 2)
+//   /demo              Demo remote (a phone): one button that raises a dust storm
 import { lazy, Suspense } from "react";
 import { Link, Navigate, Route, Routes } from "react-router";
 import { useTranslation } from "react-i18next";
@@ -16,6 +17,7 @@ const Ship = lazy(() => import("./pages/Ship").then((m) => ({ default: m.Ship })
 const ShipPicker = lazy(() => import("./pages/Ship").then((m) => ({ default: m.ShipPicker })));
 const Helmet = lazy(() => import("./pages/Helmet").then((m) => ({ default: m.Helmet })));
 const HelmetPicker = lazy(() => import("./pages/Helmet").then((m) => ({ default: m.HelmetPicker })));
+const Demo = lazy(() => import("./pages/Demo").then((m) => ({ default: m.Demo })));
 
 export function App() {
   const { t } = useTranslation();
@@ -32,6 +34,7 @@ export function App() {
         <Route path="ship/:crewId" element={<Ship />} />
         <Route path="helmet" element={<HelmetPicker />} />
         <Route path="helmet/:crewId" element={<Helmet />} />
+        <Route path="demo" element={<Demo />} />
         <Route path="astronaut/*" element={<Navigate to="/helmet" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

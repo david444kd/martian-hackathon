@@ -1,4 +1,5 @@
-// How an anomaly looks on every 2D map (mission control, the ship, the helmet's map, the globe):
+// FALLBACK ONLY (no WebGL): the maps now draw anomalies with lib/anomalyShader.ts (StormLayer.tsx,
+// stormSprite.ts). How an anomaly looks on every 2D map (mission control, the ship, the helmet's map, the globe):
 // a dust storm is a churning, rotating cloud of dust with spiral streaks and the odd electrostatic
 // flash; a dust devil a tight bright vortex; a rockfall a hatched field of debris. Drawn on a canvas
 // from the time alone (no state), so every map shows the same picture. The thin dashed ring is the

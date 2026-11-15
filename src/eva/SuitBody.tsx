@@ -13,16 +13,28 @@ import type { EvaRuntime } from "./runtime";
 import { XR_PREVIEW } from "./xrPreview";
 import { fabric, foil, patch, rubber } from "./textures";
 import { mergeStatic } from "./merge";
+import { ATMO } from "./atmo";
 
 interface Mats { fabric: THREE.Material; pad: THREE.Material; rubber: THREE.Material; ring: THREE.Material; red: THREE.Material; dark: THREE.Material; foil: THREE.Material; ghost: THREE.Material }
+
+/** dust settles on the suit in a storm and stays (atmo.tsx uSuitDust): most in the creases and the weave, least on bare metal */
+function dusty<T extends THREE.MeshStandardMaterial>(m: T, hold: number): T {
+  m.customProgramCacheKey = () => `eva-suit-dust-${hold}`;
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uSuitDust = ATMO.uSuitDust;
+    sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform float uSuitDust;").replace("#include <map_fragment>",
+      `#include <map_fragment>\n{ float lum = dot(diffuseColor.rgb, vec3(0.3333)); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.50, 0.25, 0.12) * (0.75 + 0.5 * lum), uSuitDust * ${hold.toFixed(2)} * (1.25 - 0.5 * lum)); }`);
+  };
+  return m;
+}
 
 function materials(): Mats {
   const f = fabric([3, 3]), f2 = fabric([1.5, 1.5]), r = rubber(), g = foil([1, 1]);
   return {
-    fabric: new THREE.MeshStandardMaterial({ map: f.map, normalMap: f.normalMap, normalScale: new THREE.Vector2(0.7, 0.7), roughness: 0.94, metalness: 0 }),
-    pad: new THREE.MeshStandardMaterial({ map: f2.map, normalMap: f2.normalMap, normalScale: new THREE.Vector2(1, 1), roughness: 0.9, color: "#e3ded2" }),
-    rubber: new THREE.MeshStandardMaterial({ map: r.map, normalMap: r.normalMap, roughness: 0.7, metalness: 0 }),
-    ring: new THREE.MeshStandardMaterial({ color: "#c2c7cc", roughness: 0.22, metalness: 1 }),
+    fabric: dusty(new THREE.MeshStandardMaterial({ map: f.map, normalMap: f.normalMap, normalScale: new THREE.Vector2(0.7, 0.7), roughness: 0.94, metalness: 0 }), 0.6),
+    pad: dusty(new THREE.MeshStandardMaterial({ map: f2.map, normalMap: f2.normalMap, normalScale: new THREE.Vector2(1, 1), roughness: 0.9, color: "#e3ded2" }), 0.7),
+    rubber: dusty(new THREE.MeshStandardMaterial({ map: r.map, normalMap: r.normalMap, roughness: 0.7, metalness: 0 }), 0.5),
+    ring: dusty(new THREE.MeshStandardMaterial({ color: "#c2c7cc", roughness: 0.22, metalness: 1 }), 0.3),
     red: new THREE.MeshStandardMaterial({ color: "#a8281f", roughness: 0.32, metalness: 0.85 }),
     dark: new THREE.MeshStandardMaterial({ color: "#23292d", roughness: 0.55, metalness: 0.4 }),
     foil: new THREE.MeshStandardMaterial({ map: g.map, normalMap: g.normalMap, roughness: 0.35, metalness: 0.9 }),
@@ -56,15 +68,17 @@ function hand(m: Mats, inner: 1 | -1) {
   g.add(mesh(new RoundedBoxGeometry(0.084, 0.014, 0.088, 3, 0.006), m.rubber, 0, -0.015, -0.058));   // palm
   g.add(mesh(new RoundedBoxGeometry(0.068, 0.014, 0.058, 3, 0.007), m.pad, 0, 0.019, -0.05));         // quilted back
   const lens = [0.076, 0.086, 0.08, 0.062], rad = [0.0128, 0.0132, 0.0126, 0.0112];
+  // the four fingers hang on one joint along the knuckles, so they can close on the grip (the glove is stiff: they move together)
+  const curl = new THREE.Group(); curl.position.set(0, 0, -0.106); curl.name = "fingers"; curl.userData.joint = true; g.add(curl);
   for (let f = 0; f < 4; f++) {
     const x = inner * (0.034 - f * 0.0225);                                   // index next to the thumb
     g.add(mesh(new THREE.SphereGeometry(rad[f] * 1.22, 8, 6), m.pad, x, 0.006, -0.105)); // knuckle
     const fg = finger(m, lens[f], rad[f], [0.3 + f * 0.07, 0.5 + f * 0.06, 0.32]);
-    fg.position.set(x, 0, -0.106); fg.rotation.y = inner * (0.07 - f * 0.05);  // slightly spread
-    g.add(fg);
+    fg.position.set(x, 0, 0); fg.rotation.y = inner * (0.07 - f * 0.05);  // slightly spread
+    curl.add(fg);
   }
   // thumb: a pad at its base, two phalanges, opposed
-  const th = new THREE.Group();
+  const th = new THREE.Group(); th.name = "thumb"; th.userData.joint = true;
   th.position.set(inner * 0.044, -0.006, -0.03); th.rotation.set(-0.28, -inner * 0.95, inner * 0.35, "YXZ");
   const pad = mesh(new THREE.SphereGeometry(0.02, 14, 10), m.fabric, 0, 0, -0.004); pad.scale.set(1, 0.85, 1.5); th.add(pad);
   const t1 = new THREE.Group(); t1.position.z = -0.022; t1.rotation.x = -0.18; th.add(t1);
@@ -160,6 +174,12 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
     const screenArms = new THREE.Group(); screenArms.add(left, right);
     // --- VR: a glove with a short sleeve on each controller (short and with few folds: it is close to the eyes)
     const xrL = arm(m, 1, 0.15, cuff(m, wristXr.mesh, 0.17), 2), xrR = arm(m, -1, 0.15, sleevePatch(0.19), 2);
+    // the joints that close with the controller's grip and trigger, and how they rest
+    const grasp = (a: THREE.Object3D) => {
+      const fingers = a.getObjectByName("fingers")!, thumb = a.getObjectByName("thumb")!;
+      return { fingers, thumb, f0: fingers.quaternion.clone(), t0: thumb.quaternion.clone(), grip: 0, trig: 0 };
+    };
+    const hands = { left: grasp(xrL), right: grasp(xrR) };
 
     // --- the body, in the world under your head
     const body = new THREE.Group();
@@ -196,7 +216,7 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
     body.add(mesh(new RoundedBoxGeometry(0.52, 0.8, 0.24, 2, 0.05), m.ghost, 0, 1.28, 0.32));
     for (const s of [-1, 1]) { const ua = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.5, 4, 10), m.ghost); ua.position.set(s * 0.33, 1.1, -0.02); ua.rotation.set(0.25, 0, s * 0.12); body.add(ua); }
     mergeStatic(body, { cast: true, receive: false }); // the legs stay jointed (hip, knee)
-    return { screenArms, left, right, rest, xrL, xrR, body, legL, legR };
+    return { screenArms, left, right, rest, xrL, xrR, body, legL, legR, hands };
   }, [m, wrist, wristXr, chest]);
 
   const controllers = useMemo(() => [gl.xr.getController(0), gl.xr.getController(1)], [gl]);
@@ -224,7 +244,7 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
   }, [camera, scene, parts, controllers]);
 
   const s = useRef({ t: 1, phase: 0, amp: 0, yaw: 0, first: true });
-  const v = useMemo(() => ({ p: new THREE.Vector3(), f: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3() }), []);
+  const v = useMemo(() => ({ p: new THREE.Vector3(), f: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3(), q: new THREE.Quaternion(), ax: new THREE.Vector3(1, 0, 0) }), []);
   useFrame((_, dt) => {
     const xr = gl.xr.isPresenting || XR_PREVIEW, st = s.current, walking = rt.pose.moving && rt.pose.speed < 4;
     st.amp += ((walking ? 1 : 0) - st.amp) * Math.min(1, dt * 5);
@@ -237,6 +257,17 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
       const { l, r } = parts.rest;
       aim(parts.left, v.a.copy(l.at).add(v.b.set(0, sw * 0.014 + breathe, cw * 0.03)), v.b.copy(l.to).add(v.p.set(0, sw * 0.02, 0)), l.roll);
       aim(parts.right, v.a.copy(r.at).add(v.b.set(0, -sw * 0.014 + breathe, -cw * 0.03)), v.b.copy(r.to).add(v.p.set(0, -sw * 0.02, 0)), r.roll);
+    }
+
+    // the gloves close with the hand: the fingers on the grip, the thumb on the trigger
+    const session = gl.xr.isPresenting ? gl.xr.getSession() : null;
+    if (session) for (const src of session.inputSources) {
+      const h = src.handedness === "left" ? parts.hands.left : src.handedness === "right" ? parts.hands.right : null, gp = src.gamepad;
+      if (!h || !gp) continue;
+      const k = Math.min(1, dt * 14);
+      h.grip += ((gp.buttons[1]?.value ?? 0) - h.grip) * k; h.trig += ((gp.buttons[0]?.value ?? 0) - h.trig) * k;
+      h.fingers.quaternion.copy(h.f0).multiply(v.q.setFromAxisAngle(v.ax, -(h.grip * 0.85 + h.trig * 0.25)));
+      h.thumb.quaternion.copy(h.t0).multiply(v.q.setFromAxisAngle(v.ax, -(h.trig * 0.45 + h.grip * 0.2)));
     }
 
     // the body under the head, turning with it lazily

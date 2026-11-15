@@ -13,10 +13,11 @@ import { HazardColumns, tube } from "../astro/Scene";
 import type { Route } from "../lib/types";
 import { Player } from "./Player";
 import { Beacon, GroundGuide, Rocks, RouteTube } from "./World";
-import { ATMO, Atmosphere, Lights, Sky } from "./atmo";
+import { ATMO, Atmosphere, HelmetLamp, Lights, Sky } from "./atmo";
 import { Ground } from "./Ground";
 import { DustDevil, StormFront, VisorGrit, WindDust } from "./Storm";
 import { wind } from "./wind";
+import { Presence } from "./Presence";
 import { Buttes, Outpost, ScienceSite } from "./Structures";
 import { Suit } from "./SuitBody";
 import type { Closed } from "./runtime";
@@ -33,7 +34,7 @@ const XR_HUD_SCALE = 1.3;
 /** the HUD patches sit on a sphere this far from the eyes, at the Quest 2 panel's ~21 px per degree */
 const HUD_R = 2, HUD_PX_PER_DEG = 21;
 /** how often each HUD block is redrawn, s (one block per frame at most: a canvas upload is not free) */
-const HUD_EVERY: Record<string, number> = { tape: 0.1, map: 0.2, message: 0.15, nav: 0.3, suit: 0.5, env: 1 };
+const HUD_EVERY: Record<string, number> = { tape: 0.1, steer: 0.1, map: 0.2, message: 0.15, nav: 0.3, suit: 0.5, env: 1 };
 
 const IDENTITY_M = new THREE.Matrix4();
 
@@ -109,6 +110,7 @@ function Surface({ hm, home, rt, view, route, mode, storm, windDeg, lmst, anchor
       <Sky />
       <Environment sun={sun} />
       <Lights rt={rt} dir={sun} />
+      <HelmetLamp />
       <Ground hm={hm} rt={rt} anchor={anchor} />
       <Rocks hm={hm} rt={rt} route={line} />
       <Outpost hm={hm} home={homeL} onSolid={setBase} />
@@ -124,6 +126,7 @@ function Surface({ hm, home, rt, view, route, mode, storm, windDeg, lmst, anchor
         : <StormFront key={e.id} hm={hm} at={at} radius={e.radius_m!} level={e.level} rt={rt} />)}
       <WindDust />
       <VisorGrit />
+      <Presence hm={hm} rt={rt} />
       <Player hm={hm} rt={rt} />
       <Suit rt={rt} o2={suitRead} />
       <XrHud hm={hm} rt={rt} view={view} home={homeL} />
@@ -215,28 +218,46 @@ function XrHud({ hm, rt, view, home }: { hm: Heightmap; rt: EvaRuntime; view: Re
     gr.addColorStop(0.95, "rgba(10,18,22,0.5)"); gr.addColorStop(1, "rgba(8,14,18,0.78)");
     vg.fillStyle = gr; vg.fillRect(0, 0, 512, 512); // past the radius the last colour carries on into the corners
     const vigTex = new THREE.CanvasTexture(vig); vigTex.colorSpace = THREE.SRGBColorSpace;
-    // the same plane carries the dust that settles on the glass in a storm (thickest towards the rim)
+    // the same plane is the glass itself: the dust that settles on it in a storm (thickest towards the
+    // rim), the Sun's glare with the fine scratches that light up in arcs round it, and your breath
+    // misting the lower edge with each exhale
     const rimMat = new THREE.ShaderMaterial({
       transparent: true, depthTest: false, depthWrite: false, fog: false,
-      uniforms: { uVig: { value: vigTex }, uCloud: ATMO.uCloud, uFilm: ATMO.uFilm, uDust: ATMO.uDust },
-      vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
-      fragmentShader: /* glsl */ `uniform sampler2D uVig, uCloud; uniform float uFilm; uniform vec3 uDust; varying vec2 vUv;
+      uniforms: { uVig: { value: vigTex }, uCloud: ATMO.uCloud, uFilm: ATMO.uFilm, uDust: ATMO.uDust, uSunDisc: ATMO.uSunDisc, uSunView: { value: new THREE.Vector3(0, 1, 0) }, uBreath: { value: 0 } },
+      vertexShader: "varying vec2 vUv; varying vec3 vRay; void main(){ vUv = uv; vRay = vec3(position.x, position.y + 0.02, -1.5); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+      fragmentShader: /* glsl */ `uniform sampler2D uVig, uCloud; uniform float uFilm, uSunDisc, uBreath; uniform vec3 uDust, uSunView; varying vec2 vUv; varying vec3 vRay;
+        void over(inout vec3 pm, inout float a, vec3 c, float la) { pm = pm * (1.0 - la) + c * la; a = a * (1.0 - la) + la; }
         void main(){
           vec4 v = texture2D(uVig, vUv);
-          float film = 0.0;
+          vec3 pm = v.rgb * v.a; float a = v.a;
+          vec3 r = normalize(vRay);
           if (uFilm > 0.002) {
             float n = texture2D(uCloud, vUv * vec2(2.5, 2.2)).g * 0.6 + texture2D(uCloud, vUv * 8.0 + 0.3).g * 0.4;
-            film = uFilm * smoothstep(0.32, 0.66, n) * (0.16 + 0.84 * smoothstep(0.12, 0.52, length(vUv - 0.5))) * 0.4;
+            over(pm, a, uDust * 0.85, uFilm * smoothstep(0.32, 0.66, n) * (0.16 + 0.84 * smoothstep(0.12, 0.52, length(vUv - 0.5))) * 0.4 * (1.0 - v.a));
           }
-          float a = v.a + film * (1.0 - v.a);
-          gl_FragColor = linearToOutputTexel(vec4((v.rgb * v.a + uDust * 0.85 * film * (1.0 - v.a)) / max(a, 0.0001), a)); }`,
+          // the Sun in the glass
+          float c = max(dot(r, uSunView), 0.0);
+          if (c > 0.8 && uSunView.z < 0.0) {
+            // a faint veil towards the Sun; within ~12° of it, short hairline scratches catching the light
+            vec2 off = r.xy - uSunView.xy; float ang = atan(off.y, off.x), rad = length(off);
+            float hair = texture2D(uCloud, vec2(ang * 0.3183, rad * 55.0)).r, broken = texture2D(uCloud, vec2(ang * 2.2282, rad * 2.0)).g;
+            float scratch = pow(hair, 5.0) * smoothstep(0.5, 0.68, broken);
+            float c2 = c * c, c8 = c2 * c2 * c2 * c2, c64 = c8 * c8; c64 *= c64; c64 *= c64;
+            over(pm, a, vec3(1.0, 0.94, 0.84), uSunDisc * (c8 * c8 * 0.045 + c64 * c8 * c8 * 0.5 * scratch) * (1.0 - v.a));
+          }
+          // breath on the glass
+          if (uBreath > 0.01) {
+            float low = smoothstep(0.18, 0.62, -r.y / -r.z) * (1.0 - smoothstep(0.1, 0.75, abs(r.x / r.z)));
+            over(pm, a, vec3(0.82, 0.87, 0.9), uBreath * low * (0.5 + 0.5 * texture2D(uCloud, vUv * 3.0).g) * 0.22 * (1.0 - v.a));
+          }
+          gl_FragColor = linearToOutputTexel(vec4(pm / max(a, 0.0001), a)); }`,
     });
     // 4.2 × 3.6 m at 1.5 m: clear out to ~47° sideways and ~43° up/down, darker only past that
     const rim = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 3.6), rimMat);
     rim.position.set(0, 0.02, -1.5); rim.renderOrder = 997; // under the display: dust on the glass does not hide the readouts
     group.add(rim);
     group.visible = false;
-    return { group, patches, rim, rimMat, vigTex, flick: { v: 1 } };
+    return { group, patches, rim, rimMat, vigTex, flick: { v: 1 }, breath: { phase: 0 }, inv: new THREE.Matrix4() };
   }, []);
   useEffect(() => {
     camera.add(parts.group);
@@ -251,6 +272,12 @@ function XrHud({ hm, rt, view, home }: { hm: Heightmap; rt: EvaRuntime; view: Re
     const shown = gl.xr.isPresenting || XR_PREVIEW;
     parts.group.visible = shown;
     if (!shown) return;
+    // the glass: where the Sun is in the helmet's own frame, and the breath (the suit model's breathing rate)
+    const head = gl.xr.isPresenting ? gl.xr.getCamera() : camera;
+    parts.rimMat.uniforms.uSunView.value.copy(ATMO.uSun.value).transformDirection(parts.inv.copy(head.matrixWorld).invert());
+    const suit = view.current?.suit;
+    parts.breath.phase += dt * ((suit?.resp ?? 13) / 60) * Math.PI * 2;
+    parts.rimMat.uniforms.uBreath.value = Math.max(0, Math.sin(parts.breath.phase)) ** 2 * (0.45 + (suit?.exertion ?? 0) * 0.55);
     // a static discharge in the dust: the display flickers for an instant
     const flick = performance.now() - wind.zapAt < 130 ? 0.5 + Math.random() * 0.4 : 1;
     if (flick !== parts.flick.v) { parts.flick.v = flick; for (const p of parts.patches) (p.mesh.material as THREE.MeshBasicMaterial).opacity = flick; }

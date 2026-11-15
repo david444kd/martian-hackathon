@@ -10,7 +10,7 @@ interface LanguageSwitcherProps {
 
 export function LanguageSwitcher({ className, showIcon = true }: LanguageSwitcherProps) {
   const { i18n } = useTranslation();
-  const current = (i18n.language?.slice(0, 2) as SupportedLanguage) || "ru";
+  const current = (i18n.language?.slice(0, 2) as SupportedLanguage) || "en";
 
   return (
     <div className={cn("inline-flex items-center gap-1 rounded-lg border bg-background/60 p-0.5 backdrop-blur", className)}>

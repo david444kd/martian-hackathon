@@ -106,7 +106,7 @@ export function Ship() {
             )}
             {plans.data?.map((p, i) => (
               <PlanCard key={p.id} n={i + 1} plan={p} selected={p.id === selId} hm={hm.data} zone={zone} env={env} start={startOf(p)}
-                draft={drafts[p.id] ?? null} onProbe={setProbe}
+                draft={drafts[p.id] ?? null} onProbe={setProbe} tempC={cond?.tempC}
                 onSelect={() => setSelId(p.id === selId ? null : p.id)}
                 onDraft={(d) => setDrafts((all) => { const next = { ...all }; if (d) next[p.id] = d; else delete next[p.id]; return next; })} />
             ))}
@@ -159,7 +159,7 @@ function ActiveEva({ plan, hm, env, astro, home }: { plan: WorkPlan; hm: Heightm
     setBusy(true); setErr(null);
     try {
       const route: Route = back
-        ? await returnRoute(hm, here, home!, env.avoid, plan.route?.reason ?? "Recall")
+        ? await returnRoute(hm, here, home!, env.avoid, plan.route?.reason ?? t("evahud.recall"))
         : { ...(await generateRoute(hm, here, [plan.target_lat, plan.target_lon], env.avoid)), start: { lat: here[0], lon: here[1], name: t("ship.rerouted_here") }, target: { lat: plan.target_lat, lon: plan.target_lon }, generated_at: new Date().toISOString() };
       await update.mutateAsync({ id: plan.id, patch: { route, progress_m: 0 } });
       toast.success(t("eva.new_route_sent_toast"));
@@ -171,7 +171,7 @@ function ActiveEva({ plan, hm, env, astro, home }: { plan: WorkPlan; hm: Heightm
     if (!hm || !here || !home) return;
     setBusy(true); setErr(null);
     try {
-      const route = await returnRoute(hm, here, home, env.avoid, "Recalled by the ship");
+      const route = await returnRoute(hm, here, home, env.avoid, t("evahud.recall_from_ship"));
       await update.mutateAsync({ id: plan.id, patch: { route, progress_m: 0 } });
       toast.success(t("ship.recall_sent_toast"));
     } catch (e) { setErr(e); } finally { setBusy(false); }
@@ -201,9 +201,9 @@ function ActiveEva({ plan, hm, env, astro, home }: { plan: WorkPlan; hm: Heightm
   );
 }
 
-function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, onDraft, onProbe }: {
+function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, onDraft, onProbe, tempC }: {
   n: number; plan: WorkPlan; selected: boolean; hm: Heightmap | undefined; zone: Zone | undefined; env: Env; start: Start | null;
-  draft: PathResult | null; onSelect: () => void; onDraft: (d: PathResult | null) => void; onProbe: (at: [number, number] | null) => void;
+  draft: PathResult | null; onSelect: () => void; onDraft: (d: PathResult | null) => void; onProbe: (at: [number, number] | null) => void; tempC?: number;
 }) {
   const { t } = useTranslation();
   const update = useUpdatePlan(), startEva = useStartEva();
@@ -271,7 +271,7 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
               <div className="text-xs font-medium text-live">{t("ship.new_route_unsent")}</div>
               <RouteStats route={draft} />
               <RouteProfile route={draft} onHover={onProbe} />
-              <RouteBudget route={draft} />
+              <RouteBudget route={draft} tempC={tempC} />
             </div>
           )}
           {saved && !draft && (
@@ -281,7 +281,7 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
               {crossed.length > 0 && <div className="rounded-lg bg-red-500/15 px-2.5 py-1.5 text-xs text-red-200">{t("ship.anomalies_crossed_warning", { crossed: crossed.map(eventLabel).join(", ") })}</div>}
               <RouteStats route={saved} />
               <RouteProfile route={saved} onHover={onProbe} progress={plan.status === "in_progress" ? plan.progress_m : null} />
-              {!isReturn(saved) && <RouteBudget route={saved} />}
+              {!isReturn(saved) && <RouteBudget route={saved} tempC={tempC} />}
             </div>
           )}
 

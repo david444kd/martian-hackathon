@@ -131,7 +131,7 @@ export const tyre = () => bake("tyre", 256, (u, v) => {
 }, 4, [1, 1]);
 
 /** layered sedimentary rock: thin horizontal beds of varying hardness and colour, fractured, dusted */
-export const strata = (seed = 0, repeat: [number, number] = [2, 1]) => bake(`strata${seed}${repeat}`, 512, (u, v) => {
+export const strata = (seed = 0, repeat: [number, number] = [2, 1]) => bake(`strata3-${seed}${repeat}`, 512, (u, v) => {
   const warp = (fbm(u + seed * 0.13, v, 3, 4) - 0.5) * 0.06;
   const y = v + warp;
   const bed = fbm(0.5, y * 9 + seed, 24, 3);                 // which bed, by height
@@ -139,10 +139,11 @@ export const strata = (seed = 0, repeat: [number, number] = [2, 1]) => bake(`str
   const hard = sat((bed - 0.42) * 4);                           // hard beds stand out as ledges
   const grain = fbm(u, v, 24, 4);
   const crack = Math.pow(sat(1 - Math.abs(fbm(u * 2 + seed, v * 0.5, 9, 3) - 0.5) * 9), 3);
-  const h = hard * 1.6 + thin * 0.5 + grain * 0.35 - crack * 1.4;
-  const tone = 0.62 + bed * 0.5 + thin * 0.12 + grain * 0.12 - crack * 0.25;
+  const h = hard * 1.6 + thin * 0.5 + grain * 0.35 - crack * 0.45;
+  const tone = 0.7 + bed * 0.42 + thin * 0.12 + grain * 0.12 - crack * 0.07;
   const red = 0.5 + fbm(u * 0.5, y * 5 + 7, 12, 2) * 0.5;      // iron-rich beds
-  return { h, r: sat(tone * (0.74 + red * 0.16)) * 255, g: sat(tone * (0.47 + (1 - red) * 0.1)) * 255, b: sat(tone * (0.31 + (1 - red) * 0.07)) * 255, rough: 0.9 };
+  // the colours of the plain around them (dusty tan), a little redder in the iron-rich beds
+  return { h, r: sat(tone * (0.56 + red * 0.06)) * 255, g: sat(tone * (0.46 + (1 - red) * 0.03)) * 255, b: sat(tone * (0.39 + (1 - red) * 0.02)) * 255, rough: 0.9 };
 }, 3.2, repeat, true);
 
 /** a rock's surface: pits and grain, near-white (the rock's own colours come from its vertices) */

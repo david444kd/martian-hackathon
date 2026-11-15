@@ -92,7 +92,8 @@ function groundMaterial() {
         ${ATMO_GLSL}
         uniform sampler2D uPhoto, uClose, uDetail, uCloud;
         uniform vec4 uCloseRect; uniform vec2 uFadeCenter, uFadeScale, uWind;
-        uniform float uPhotoOn, uCloseOn, uDrift, uLight;
+        uniform float uPhotoOn, uCloseOn, uDrift, uLight, uTime, uLamp;
+        uniform vec3 uLampPos, uLampDir;
         uniform vec3 uDust, uShadow;
         uniform vec4 uFronts[2];
         varying vec2 vGUv; varying vec3 vGW; varying vec3 vGN;
@@ -117,8 +118,18 @@ function groundMaterial() {
         float tone = mix(1.0, d1.z * 2.0, 0.6 * near) * mix(1.0, d2.z * 2.0, 0.14 * mid);
         // the photo has its own shading; the DTM's slope only leans it gently towards the scene's Sun
         float slope = mix(1.0, clamp(gFlat / max(uSun.y, 0.2), 0.6, 1.3), 0.3);
-        col *= relief * tone * slope * uLight;
+        vec3 albedo = col * tone;
+        // thin dust high up is never even: broad soft patches of shade and light drift over the plain in clear air
+        float drift = texture2D(uCloud, vGW.xz * 0.00042 + uWind * (uTime * 0.0021)).g;
+        float veil = mix(1.0, 0.8 + 0.3 * smoothstep(0.32, 0.68, drift), (1.0 - uStorm) * (1.0 - smoothstep(4000.0, 9000.0, gDist) * 0.5));
+        col = albedo * relief * slope * uLight * veil;
         col *= mix(uShadow, vec3(1.0), getShadowMask());
+        // the helmet lamps: a warm pool of light ahead when the daylight goes
+        if (uLamp > 0.01) {
+          vec3 toL = uLampPos - vGW; float ld = length(toL); vec3 Ld = toL / ld;
+          float aim = dot(-Ld, uLampDir), cone = smoothstep(0.86, 0.95, aim) * (0.7 + 0.3 * smoothstep(0.95, 0.99, aim));
+          col += albedo * vec3(1.0, 0.96, 0.9) * (uLamp * cone * max(dot(bN, Ld), 0.0) * 13.0 / (1.0 + ld * ld * 0.2));
+        }
         // sand streaming over the ground in the wind
         if (uStorm > 0.03) {
           float al = dot(vGW.xz, uWind), ac = dot(vGW.xz, vec2(-uWind.y, uWind.x));

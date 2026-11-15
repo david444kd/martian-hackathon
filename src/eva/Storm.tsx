@@ -46,7 +46,7 @@ function column(hm: Heightmap, at: P2, height: number, seg: number, rows: number
   return g;
 }
 
-const atmoUniforms = () => ({ uGust: ATMO.uGust, uSun: ATMO.uSun, uHorizon: ATMO.uHorizon, uZenith: ATMO.uZenith, uSunGlow: ATMO.uSunGlow, uSunDisc: ATMO.uSunDisc, uFogDensity: ATMO.uFogDensity, uStorm: ATMO.uStorm, uTime: ATMO.uTime, uCloud: ATMO.uCloud, uEye: ATMO.uEye, uWind: ATMO.uWind, uDrift: ATMO.uDrift, uDust: ATMO.uDust });
+const atmoUniforms = () => ({ uLampPos: ATMO.uLampPos, uLampDir: ATMO.uLampDir, uLamp: ATMO.uLamp, uGust: ATMO.uGust, uSun: ATMO.uSun, uHorizon: ATMO.uHorizon, uZenith: ATMO.uZenith, uSunGlow: ATMO.uSunGlow, uSunDisc: ATMO.uSunDisc, uFogDensity: ATMO.uFogDensity, uStorm: ATMO.uStorm, uTime: ATMO.uTime, uCloud: ATMO.uCloud, uEye: ATMO.uEye, uWind: ATMO.uWind, uDrift: ATMO.uDrift, uDust: ATMO.uDust });
 
 // ------------------------------------------------------------------------------------------------
 export function StormFront({ hm, at, radius, level, rt }: { hm: Heightmap; at: P2; radius: number; level: string; rt: EvaRuntime }) {
@@ -198,8 +198,8 @@ export function WindDust() {
     // --- grains: each a short ribbon along the wind, in a box that travels with the head
     const streakMat = new THREE.ShaderMaterial({
       ...common, uniforms: atmoUniforms(),
-      vertexShader: /* glsl */ `attribute vec4 aSeed; uniform vec3 uEye; uniform vec2 uWind; uniform float uDrift, uStorm, uTime, uGust;
-        varying vec2 vQ; varying float vA; varying float vBig;
+      vertexShader: /* glsl */ `attribute vec4 aSeed; uniform vec3 uEye, uLampPos, uLampDir; uniform vec2 uWind; uniform float uDrift, uStorm, uTime, uGust, uLamp;
+        varying vec2 vQ; varying float vA; varying float vBig; varying float vLit;
         const vec3 BOX = vec3(30.0, 9.0, 30.0);
         void main(){
           vec3 wind = normalize(vec3(uWind.x, 0.0, uWind.y));
@@ -217,12 +217,15 @@ export function WindDust() {
           vec3 p = c + along * (position.x * len) + side * (position.y * wid);
           vQ = position.xy * 2.0;
           vA = smoothstep(0.35, 1.6, d) * (1.0 - smoothstep(10.0, 15.0, d)) * step(aSeed.w, 0.15 + uStorm * 0.85) * (0.75 + uGust * 0.7);
+          // grains crossing the lamps' beam flare up
+          vec3 fromLamp = c - uLampPos; float ld = length(fromLamp);
+          vLit = uLamp * smoothstep(0.86, 0.95, dot(fromLamp / ld, uLampDir)) * 1.6 / (1.0 + ld * ld * 0.2) * (1.0 - vBig);
           if (vA <= 0.0) p = c;                                  // nothing to draw: no pixels
           gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0); }`,
-      fragmentShader: /* glsl */ `uniform vec3 uDust; uniform float uStorm; varying vec2 vQ; varying float vA; varying float vBig;
+      fragmentShader: /* glsl */ `uniform vec3 uDust; uniform float uStorm; varying vec2 vQ; varying float vA; varying float vBig; varying float vLit;
         void main(){
-          float a = (1.0 - vQ.y * vQ.y) * (1.0 - vQ.x * vQ.x) * vA * (0.16 + uStorm * 0.32) * (1.0 + vBig);
-          gl_FragColor = vec4(uDust * mix(1.25, 0.5, vBig), a);
+          float a = (1.0 - vQ.y * vQ.y) * (1.0 - vQ.x * vQ.x) * vA * (0.16 + uStorm * 0.32) * (1.0 + vBig) * (1.0 + vLit * 0.8);
+          gl_FragColor = vec4(uDust * mix(1.25, 0.5, vBig) + vec3(1.0, 0.9, 0.76) * vLit, min(a, 1.0));
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }`,

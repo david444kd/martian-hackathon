@@ -143,6 +143,12 @@ export const ATMO = {
   uGust: { value: 0 },
   /** dust settled on the visor 0..1: builds up inside a storm, clears slowly after */
   uFilm: { value: 0 },
+  /** the helmet lamps: where they are, where they point, how bright (0 in daylight; on in thick dust) */
+  uLampPos: { value: new THREE.Vector3() },
+  uLampDir: { value: new THREE.Vector3(0, -0.2, -1) },
+  uLamp: { value: 0 },
+  /** dust that has settled on the suit 0..1: gathers in a storm and stays for minutes after */
+  uSuitDust: { value: 0 },
   /** up to two dust-storm areas (x, z, radius, 1): the ground before their walls is veiled with dust */
   uFronts: { value: [new THREE.Vector4(), new THREE.Vector4()] },
 };
@@ -221,8 +227,15 @@ export function Atmosphere({ storm, windDeg, sun }: { storm: number; windDeg: nu
     ATMO.uHorizon.value.multiplyScalar(1 - squall * 0.3); ATMO.uZenith.value.multiplyScalar(1 - squall * 0.45);
     fog.color.copy(ATMO.uHorizon.value); bg.copy(ATMO.uHorizon.value);
     scene.environmentIntensity = 0.85 * (1 - ks * 0.55);
-    if (gl.xr.isPresenting) gl.xr.getCamera().getWorldPosition(ATMO.uEye.value);
-    else camera.getWorldPosition(ATMO.uEye.value);
+    const head = gl.xr.isPresenting ? gl.xr.getCamera() : camera;
+    head.getWorldPosition(ATMO.uEye.value);
+    // the helmet lamps come on when thick dust takes the daylight (the scene keeps its Sun above the
+    // horizon at any hour so it stays readable, so there is no dusk for them to answer to)
+    const want = THREE.MathUtils.smoothstep(ks, 0.3, 0.7);
+    ATMO.uLamp.value += (want - ATMO.uLamp.value) * Math.min(1, dt * 1.2);
+    ATMO.uLampDir.value.set(0, -0.22, -1).normalize().transformDirection(head.matrixWorld);
+    ATMO.uLampPos.value.copy(ATMO.uEye.value).y += 0.14;
+    ATMO.uSuitDust.value = THREE.MathUtils.clamp(ATMO.uSuitDust.value + dt * (k > 0.55 ? 0.02 * k + squall * 0.03 : -0.002), 0, 1);
   }, -2);
   return null;
 }
@@ -297,4 +310,27 @@ export function Lights({ rt, dir }: { rt: EvaRuntime; dir: THREE.Vector3 }) {
         shadow-camera-left={-b} shadow-camera-right={b} shadow-camera-top={b} shadow-camera-bottom={-b} shadow-camera-near={20} shadow-camera-far={700} />
     </>
   );
+}
+
+// ------------------------------------------------------------------------------------------------
+/**
+ * The helmet lamps for everything that is lit the ordinary way (rocks, the base, the gloves): one warm
+ * spotlight on the head, no shadows, at zero in daylight. The ground and the dust in the air take the
+ * same beam from the uniforms above (Ground.tsx, Storm.tsx).
+ */
+export function HelmetLamp() {
+  const camera = useThree((s) => s.camera);
+  const lamp = useMemo(() => {
+    // the light's origin sits a few metres behind the head (it casts no shadows, so this cannot be seen):
+    // from the helmet itself the gloves, half a metre away, would burn out white against ground lit at four
+    const l = new THREE.SpotLight("#fff4e4", 0, 40, 0.3, 0.7, 1);
+    l.position.set(0, 0.75, 3.2); l.target.position.set(0, -0.85, -4);
+    return l;
+  }, []);
+  useEffect(() => {
+    camera.add(lamp, lamp.target);
+    return () => { camera.remove(lamp, lamp.target); lamp.dispose(); };
+  }, [camera, lamp]);
+  useFrame(() => { lamp.intensity = ATMO.uLamp.value * 4.2; });
+  return null;
 }

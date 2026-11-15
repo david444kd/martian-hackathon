@@ -81,7 +81,7 @@ export function Rocks({ hm, rt, route }: { hm: Heightmap; rt: EvaRuntime; route:
     for (let i = x0; i <= x1; i++) for (let j = z0; j <= z1; j++) {
       const k = Math.floor(hash(i, j, 1) * 4.2);
       for (let r = 0; r < k; r++) {
-        const big = hash(i, j, 30 + r) > 0.955;
+        const big = hash(i, j, 30 + r) > 0.93;
         const size = big ? 0.32 + hash(i, j, 40 + r) * 0.5 : 0.035 + hash(i, j, 40 + r) ** 2.4 * 0.27;
         const x = (i + hash(i, j, 10 + r)) * CELL, z = (j + hash(i, j, 20 + r)) * CELL;
         const d = Math.hypot(x - rt.pose.x, z - rt.pose.z);

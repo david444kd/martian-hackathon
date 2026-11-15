@@ -3,8 +3,10 @@
 // when a hazard reaches the route, and the telemetry sent every 2.5 s to mission control and the ship.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { wind } from "./wind";
-import { clearOf, outpostSolids } from "./layout";
-import { addUse, legUse, routeUse, slopeDegOf, type Use } from "../lib/consumables";
+import { clearOf, HAB_OFFSET, outpostSolids } from "./layout";
+import { ears } from "./ears";
+import { DRY_RUN } from "./xrPreview";
+import { addUse, legUse, paceOf, routeUse, slopeDegOf, type Use } from "../lib/consumables";
 import type { Crew, Level, MarsEvent, Route, WorkPlan } from "../lib/types";
 import { isReturn } from "../lib/types";
 import type { Heightmap, Zone } from "../lib/zones";
@@ -86,7 +88,10 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
   const route = plan?.route ?? localRoute ?? previewRoute;
   const stamp = route?.generated_at;
   const tele = useTelemetry(crew?.id);
-  const updatePlan = useUpdatePlan(), updateEvent = useUpdateEvent();
+  const realPlan = useUpdatePlan(), realEvent = useUpdateEvent();
+  // ?dry: every write this helmet would make is dropped (xrPreview.ts)
+  const dropped = useMemo(() => ({ mutate: () => {}, mutateAsync: async () => undefined as never }), []);
+  const updatePlan = DRY_RUN ? (dropped as unknown as typeof realPlan) : realPlan, updateEvent = DRY_RUN ? (dropped as unknown as typeof realEvent) : realEvent;
 
   // the route in the local frame
   // the route in the local frame, bent round the outpost's buildings where it runs through them
@@ -189,6 +194,14 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     };
   }, [tick, hm, zone, crew, home, line, route, plan, evs, now, acked, recall, rt, suit, notice, geoAlong, relief]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // what can be heard from where: the end of the route while walking to it, and the habitat
+  const beaconKey = view && view.line && !view.arrived && (view.mode === "out" || view.mode === "return") ? view.line : null;
+  useEffect(() => {
+    ears.beacon = beaconKey ? beaconKey.pts[beaconKey.pts.length - 1] : null;
+    if (hm && home) { const h = toLocal(hm, home[0], home[1]); ears.base = { x: h.x, z: h.z + HAB_OFFSET }; }
+    return () => { ears.beacon = null; };
+  }, [beaconKey, hm, home]);
+
   // closed areas for the Player (critical anomalies: may be left, not entered)
   useEffect(() => {
     if (!hm || !view) return;
@@ -202,14 +215,17 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
   const geoRef = useRef(geoAlong);
   geoRef.current = geoAlong;
   useEffect(() => {
-    let last = performance.now(), lastY = rt.pose.y, lastPos = { x: rt.pose.x, z: rt.pose.z }, was = rt.placed, low = 0, charging = false;
+    let last = performance.now(), lastY = rt.pose.y, lastPos = { x: rt.pose.x, z: rt.pose.z }, was = rt.placed, low = 0, charging = false, tired = 0;
     /** what the way back to the airlock is expected to use from here */
     const wayBack = (v: EvaView): Use => {
       const r = v.route, along = geoRef.current;
-      if (!r || along.length !== r.points.length) return legUse(v.toBase * 1.3, 0);
-      if (v.mode === "return" || v.mode === "complete") return routeUse(r.points, along, v.progress);
-      // outbound: the rest of the way out, then the same line back
-      return addUse(v.arrived ? { o2: 0, power: 0, water: 0 } : routeUse(r.points, along, v.progress), routeUse(r.points, along, 0, true));
+      const env = { storm: v.storm, tempC: v.cond?.tempC, fatigue: suit.s.fatigue };
+      if (!r || along.length !== r.points.length) return legUse(v.toBase * 1.3, 0, env);
+      if (v.mode === "return" || v.mode === "complete") return routeUse(r.points, along, v.progress, false, env);
+      // outbound: the rest of the way out, then the same line back, as tired as the way out leaves you
+      const out = v.arrived ? null : routeUse(r.points, along, v.progress, false, env);
+      const back = routeUse(r.points, along, 0, true, { ...env, fatigue: out ? out.fatigue : env.fatigue });
+      return out ? addUse(out, back) : back;
     };
     const id = setInterval(() => {
       const v = viewRef.current, t = performance.now(), dt = (t - last) / 1000;
@@ -224,7 +240,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
         suit.recharge(dt);
         if (!charging) { charging = true; note(i18n.t("evahud.hud_recharging"), "info", "suit"); }
       } else charging = false;
-      suit.step(dt, moved, rise, v?.cond?.doseUSvH ?? 25, alarm, v?.storm ?? 0, v ? wayBack(v) : null);
+      suit.step(dt, moved, rise, v?.cond?.doseUSvH ?? 25, alarm, v?.storm ?? 0, v ? wayBack(v) : null, v?.cond?.tempC ?? -60);
       // not enough left for the way back: say so once as it gets low, once more when it is nearly gone
       const level = home || !v ? 0 : s.reservePct < 10 ? 2 : s.reservePct < 25 ? 1 : 0;
       if (level > low) {
@@ -232,6 +248,16 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
         audio.alarm(level === 2 ? "critical" : "warning");
       }
       low = level;
+      // tiredness: the pace drops with it; a notice when a rest is due, and when there is nothing left the autopilot stops to rest
+      rt.pace = paceOf(s.fatigue);
+      const weary = s.fatigue >= 0.98 ? 2 : s.fatigue >= 0.7 ? 1 : s.fatigue < 0.55 ? 0 : Math.min(tired, 1);
+      if (weary > tired) {
+        note(weary === 2 ? i18n.t("evahud.hud_exhausted") : i18n.t("evahud.hud_tired", { pct: Math.round(s.fatigue * 100) }), weary === 2 ? "critical" : "warning", "suit");
+        audio.alarm(weary === 2 ? "critical" : "warning");
+        rt.buzz++;
+        if (weary === 2 && rt.autopilot) { rt.autopilot = false; rt.notify(); }
+      }
+      tired = weary;
       audio.update(suit.s.resp, suit.s.exertion, rt.pose.moving, rt.pose.speed, wind.storm, suit.s.pulse);
     }, 500);
     return () => clearInterval(id);
@@ -249,6 +275,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     if (!fresh.length) return;
     const worst = fresh.some((a) => a.level === "critical") ? "critical" : fresh.some((a) => a.level === "warning") ? "warning" : "info";
     const call = fresh.some((a) => a.event.kind === "message");
+    rt.buzz++;
     if (call) audio.radio();
     audio.alarm(worst);
     setTimeout(() => {
@@ -380,7 +407,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     const avoid = avoidList(areaHazards(evs, zone.id, now, now + 6 * 3600_000));
     const back = isReturn(route);
     const make = back
-      ? returnRoute(hm, v.at, home, avoid, route.reason ?? "Recall")
+      ? returnRoute(hm, v.at, home, avoid, route.reason ?? i18n.t("evahud.recall"))
       : generateRoute(hm, v.at, [plan.target_lat, plan.target_lon], avoid).then((r): Route => ({
         ...r, start: { lat: v.at[0], lon: v.at[1], name: i18n.t("evahud.rerouted_off_route") }, target: { lat: plan.target_lat, lon: plan.target_lon },
         generated_at: new Date().toISOString(), mode: route.mode,
@@ -398,7 +425,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     let lastProgress = -1;
     const id = setInterval(() => {
       const v = viewRef.current;
-      if (!v || !rt.placed) return;
+      if (!v || !rt.placed || DRY_RUN) return;
       const p = rt.pose;
       lastSent.current = Date.now();
       void publishTelemetry({
@@ -421,7 +448,6 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     if (!a) return;
     setAcked((s) => new Set(s).add(alertKey(a)));
     if (a.ackable && !a.event.acked_at) updateEvent.mutate({ id: a.id, patch: { acked_at: new Date().toISOString() } });
-    window.speechSynthesis?.cancel();
   };
   const ackRef = useRef(ack);
   ackRef.current = ack;

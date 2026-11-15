@@ -260,10 +260,10 @@ export function Player({ hm, rt }: { hm: Heightmap; rt: EvaRuntime }) {
 
     let dx = 0, dz = 0;
     if (auto) {
-      const s = WALK * rt.autoSpeed * dt;
+      const s = WALK * rt.autoSpeed * rt.pace * dt;
       dx = auto.x * s; dz = auto.z * s;
     } else if (forward || right) {
-      const len = Math.max(1, Math.hypot(forward, right)), s = (WALK * (fast ? FAST : 1) * dt) / len;
+      const len = Math.max(1, Math.hypot(forward, right)), s = (WALK * (fast ? FAST : 1) * rt.pace * dt) / len;
       dx = (-Math.sin(heading) * forward + Math.cos(heading) * right) * s;
       dz = (-Math.cos(heading) * forward - Math.sin(heading) * right) * s;
     }

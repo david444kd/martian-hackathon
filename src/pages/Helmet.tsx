@@ -57,7 +57,7 @@ export function Helmet() {
   const audio = useMemo(() => new SuitAudio(), []);
   const suit = useMemo(() => new SuitModel(crewId ?? "none"), [crewId]);
   useEffect(() => () => audio.dispose(), [audio]);
-  useEffect(() => { if (import.meta.env.DEV) (window as unknown as { __evaAudio: SuitAudio }).__evaAudio = audio; }, [audio]); // sound levels from the console
+  useEffect(() => { if (import.meta.env.DEV) Object.assign(window, { __evaAudio: audio, __evaRt: rt }); }, [audio, rt]); // sound levels and the astronaut's pose from the console
   const [muted, setMuted] = useState(false);
   const [begun, setBegun] = useState(false);
 

@@ -27,6 +27,8 @@ export class EvaRuntime {
   autopilot = false;
   /** autopilot pace multiplier over a suited walk (?speed=) */
   autoSpeed = 1;
+  /** how much of the normal walking pace the astronaut can keep, 0.65 (exhausted) .. 1 (fresh): useEva sets it from the suit model */
+  pace = 1;
   presenting = false;
   /** the active route in the local frame (autopilot follows it), and how far along it we are */
   line: Polyline | null = null;
@@ -36,6 +38,8 @@ export class EvaRuntime {
   solid: Closed[] = [];
   /** ack requested from a controller button (A) */
   ackPressed = 0;
+  /** counts up when something should be felt in the controllers (an alert, a notice): Presence.tsx */
+  buzz = 0;
   private ls = new Set<() => void>();
   subscribe(l: () => void) { this.ls.add(l); return () => { this.ls.delete(l); }; }
   notify() { this.ls.forEach((l) => l()); }

@@ -18,7 +18,7 @@ import type { Closed } from "./runtime";
 import { ATMO } from "./atmo";
 import { Merged } from "./merge";
 import { Q } from "./quality";
-import { foil, hull, label, patch, solar, strata, tyre } from "./textures";
+import { boulder, foil, hull, label, patch, solar, strata, tyre } from "./textures";
 
 import { HAB_OFFSET, outpostSolids, ROVER } from "./layout";
 
@@ -505,8 +505,11 @@ export function Buttes({ hm, home, line, rt, onSolid }: { hm: Heightmap; home: P
   // three bedding patterns and a darker caprock; the extruded sides are mapped in metres
   const mats = useMemo(() => [0, 1, 2, 3].map((k) => {
     const t = strata(k, [0.07, 0.22]);
-    return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, normalScale: new THREE.Vector2(1.6, 1.6), roughness: 0.96, metalness: 0, color: k === 3 ? "#8f8478" : ["#ffffff", "#f3e6d8", "#ffeede"][k] });
+    return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, normalScale: new THREE.Vector2(1.6, 1.6), roughness: 0.96, metalness: 0, color: k === 3 ? "#9a8f84" : ["#ffffff", "#f6ece2", "#fff3e8"][k] });
   }), []);
+  // fallen blocks: plain rock (the bedding texture would wrap round them in rings)
+  const talusMat = useMemo(() => { const t = boulder(); return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, color: "#b9977a", roughness: 1, metalness: 0 }); }, []);
+  useEffect(() => () => talusMat.dispose(), [talusMat]);
   const cache = useMemo(() => new Map<number, THREE.BufferGeometry[]>(), []);
   const geo = (b: Butte) => { let g = cache.get(b.id); if (!g) { g = b.layers.map((l) => slab(l.seed, l.r, l.h)); cache.set(b.id, g); } return g; };
   useEffect(() => () => { cache.forEach((gs) => gs.forEach((g) => g.dispose())); mats.forEach((m) => m.dispose()); }, [cache, mats]);
@@ -524,7 +527,7 @@ export function Buttes({ hm, home, line, rt, onSolid }: { hm: Heightmap; home: P
             {/* fallen blocks at the foot */}
             {Array.from({ length: 6 }, (_, k) => {
               const a = hash(b.id, k + 200) * Math.PI * 2, d = b.r * (0.92 + hash(b.id, k + 300) * 0.4), s = 0.5 + hash(b.id, k + 400) * 1.5;
-              return <mesh key={`t${k}`} geometry={talus} material={mats[(k + b.id) % 3]} position={[Math.cos(a) * d, s * 0.3 - 0.4, Math.sin(a) * d * 0.82]} rotation={[k, a, k * 0.5]} scale={[s, s * 0.7, s * 1.1]} castShadow receiveShadow />;
+              return <mesh key={`t${k}`} geometry={talus} material={talusMat} position={[Math.cos(a) * d, s * 0.3 - 0.4, Math.sin(a) * d * 0.82]} rotation={[k, a, k * 0.5]} scale={[s, s * 0.7, s * 1.1]} castShadow receiveShadow />;
             })}
            </Merged>
           </group>

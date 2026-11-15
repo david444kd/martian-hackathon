@@ -93,3 +93,37 @@ Address parameters for these checks (combine with `&`): `?lite` cheapest setting
 | Low reserve | A long route or a suit already low: CAUTION below 25 %, WARNING below 10 %, each with its quiet tone | NOT TESTED ON DEVICE |
 | Top-up | Return to the airlock on standby: the notice appears and the three values climb back to 100 % | NOT TESTED ON DEVICE |
 | Alert tones | Raise an advisory, a caution and a critical alert: the chimes are clearly quieter than the voice and not startling in the headset | NOT TESTED ON DEVICE |
+## Presence — 2026-11-15
+
+| Check | Action | Result |
+| --- | --- | --- |
+| Boot prints | Walk 10 m, turn round and look down: a line of prints leads to your feet; a little dust rises at each step | NOT TESTED ON DEVICE |
+| Haptics | Walk: a light tick per step in the hand on that side; in a storm (`?simstorm=-80`) a thump as a squall arrives; a buzz at a refused step and at an alert. Note if any of it is annoying or too weak | NOT TESTED ON DEVICE |
+| Gloves | Squeeze the grip and the trigger: fingers and thumb close and open smoothly, nothing detaches from the hand | NOT TESTED ON DEVICE |
+| Visor | Look towards the Sun: a soft glare with faint scratches, not a pattern that draws the eye; look down while breathing hard after a climb: a light mist at the lower edge | NOT TESTED ON DEVICE |
+## Lamps, shade, placed sound, suit dust — 2026-11-15
+
+| Check | Action | Result |
+| --- | --- | --- |
+| Helmet lamps | `?simstorm=-80`: within a few seconds a pool of light appears ahead and follows the head; gloves and nearby rocks are lit, not burnt out; frame rate holds with the extra light | NOT TESTED ON DEVICE |
+| Drifting shade | Clear day, stand still and watch the plain for a minute: soft patches of shade move slowly; they must not read as flicker | NOT TESTED ON DEVICE |
+| Beacon tone | With a route (`?simroute=600`): close your eyes and turn — the pip moves between the ears and doubles when you face the target; is it audible but not tiresome over a long walk? | NOT TESTED ON DEVICE |
+| Base hum | Walk to and away from the habitat: the hum grows, shifts to its side, and is gone by ~40 m | NOT TESTED ON DEVICE |
+| Suit dust | Stand a minute in the storm, then leave it: sleeves and gloves have browned and stay so for several minutes | NOT TESTED ON DEVICE |
+## Route-finding cue and recalibrated consumables — 2026-11-15
+
+| Check | Action | Result |
+| --- | --- | --- |
+| Finding the route | On an EVA turn away from the route: chevrons appear below centre on the side to turn to and vanish when you face it; walk 20 m off the line: they point back with the distance | NOT TESTED ON DEVICE |
+| Cue size | The chevrons and the angle are readable at a glance without looking down at them | NOT TESTED ON DEVICE |
+| Consumables | Walk a route with a climb: oxygen and water fall about twice as fast on a 10 % slope as on the level; pulse and breathing rise on the climb and stay up for a while after | NOT TESTED ON DEVICE |
+
+A second browser opened to watch a running EVA must use `?dry` (it otherwise reports as the same astronaut).
+## Tiredness and no voice — 2026-11-15
+
+| Check | Action | Result |
+| --- | --- | --- |
+| Tiredness | Walk a kilometre: the `FTG` gauge reaches about a third on the level, far more on a climb; the pace visibly drops as it fills | NOT TESTED ON DEVICE |
+| Rest | At the 70 % notice stop and stand: the gauge empties in a few minutes and the pace returns | NOT TESTED ON DEVICE |
+| Spent | Keep climbing until the WARNING: the autopilot stops; the stick still moves you, slowly | NOT TESTED ON DEVICE |
+| No voice | Raise an alert and send a call from the ship: tones and text only, nothing is spoken | NOT TESTED ON DEVICE |

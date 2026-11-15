@@ -3,6 +3,7 @@
 //   top:          heading tape (with a mark where each hazard lies), and under it the alerts: the most
 //                 important one framed with what to know about it (where a hazard is, the text of a call
 //                 from the ship), the rest as short lines;
+//   below centre: the way to the route — only while you are looking away from it or have left it;
 //   left / right: suit (consumables, the LIMITING one's time, CO₂, pressure, heart rate, EVA time) and
 //                 navigation (target or airlock, bearing, ETA, base, time margin, link to the ship);
 //   bottom:       a small heading-up map (left) and the outside conditions (right).
@@ -57,7 +58,7 @@ const routeColorOf = (v: EvaView) => (v.mode === "return" || v.mode === "complet
 export interface HudData { hm: Heightmap; v: EvaView; rt: EvaRuntime; home: P2; t: number }
 
 export interface HudPart {
-  id: "tape" | "message" | "suit" | "nav" | "map" | "env";
+  id: "tape" | "message" | "steer" | "suit" | "nav" | "map" | "env";
   /** the block's own box, px at scale 1 */
   w: number; h: number;
   /** headset: where the block sits, degrees from straight ahead (yaw + right, pitch + down) and its roll */
@@ -72,7 +73,9 @@ export const HUD_PARTS: HudPart[] = [
   { id: "tape", w: 400, h: 92, yaw: 0, pitch: -25, roll: 0, sx: 0.5, sy: 0.035, ax: 0.5, ay: 0, draw: headingTape },
   // the alerts: the first line sits ~16.5° above the line of sight, the rest grows down to ~9° and no wider than ±17°
   { id: "message", w: 640, h: 162, yaw: 0, pitch: -13.4, roll: 0, sx: 0.5, sy: 0.145, ax: 0.5, ay: 0, draw: alertsBlock },
-  { id: "suit", w: 200, h: 236, yaw: -31, pitch: -3, roll: 2.5, sx: 0.075, sy: 0.46, ax: 0, ay: 0.5, draw: suitBlock },
+  // the way back to the route: ~10° below the line of sight, ±18° wide, empty unless it is needed
+  { id: "steer", w: 600, h: 72, yaw: 0, pitch: 10.5, roll: 0, sx: 0.5, sy: 0.66, ax: 0.5, ay: 0, draw: steerCue },
+  { id: "suit", w: 200, h: 258, yaw: -31, pitch: -3, roll: 2.5, sx: 0.075, sy: 0.46, ax: 0, ay: 0.5, draw: suitBlock },
   { id: "nav", w: 214, h: 236, yaw: 31, pitch: -3, roll: -2.5, sx: 0.925, sy: 0.46, ax: 1, ay: 0.5, draw: navBlock },
   { id: "map", w: 176, h: 176, yaw: -25, pitch: 21, roll: 5, sx: 0.12, sy: 0.93, ax: 0, ay: 1, draw: mapBlock },
   { id: "env", w: 330, h: 54, yaw: 25, pitch: 23, roll: -5, sx: 0.88, sy: 0.93, ax: 1, ay: 1, draw: envBlock },
@@ -243,6 +246,37 @@ function alertsBlock(ctx: CanvasRenderingContext2D, d: HudData) {
   if (rest.length > shown.length) txt(ctx, `+${rest.length - shown.length} ${h("more")}`, CX, y, 14, DIM, "center");
 }
 
+/**
+ * Finding the route again. Nothing is drawn while you face the way the route goes and are on it.
+ * Look away by more than 20° and chevrons appear at the side to turn to, running towards it, with how
+ * far round it is; leave the route by more than 15 m and they point back to the nearest part of it
+ * with the distance (amber beyond 40 m). Facing the route from off it: a mark straight ahead and the distance.
+ */
+function steerCue(ctx: CanvasRenderingContext2D, { v, rt, t }: HudData) {
+  if (!v.guide || (v.mode !== "out" && v.mode !== "return") || v.arrived) return;
+  let rel = v.guide.bearing - rt.pose.heading; rel = ((rel + 540) % 360) - 180;
+  const off = v.offRoute > 15, away = Math.abs(rel) > 20;
+  if (!off && !away) return;
+  const c = v.offRoute > 40 ? CAUTION : routeColorOf(v), CX = 300, y = 36;
+  const dist = off ? `  ${h("xtk")} ${Math.round(v.offRoute)} m` : "";
+  if (!away) {
+    // on the right heading, off the line: straight on
+    ctx.beginPath(); ctx.moveTo(CX - 14, y - 6); ctx.lineTo(CX, y - 24); ctx.lineTo(CX + 14, y - 6); stroke(ctx, c, 3);
+    txt(ctx, dist.trim(), CX, y + 18, 20, c, "center", 600);
+    return;
+  }
+  const dir = rel > 0 ? 1 : -1, behind = Math.abs(rel) > 120, x0 = CX + dir * 284;
+  // three chevrons at the edge to turn towards, lighting up one after another outwards (four when it is behind you)
+  const n = behind ? 4 : 3, lit = Math.floor(t * 4) % (n + 1);
+  for (let k = 0; k < n; k++) {
+    const x = x0 - dir * (n - 1 - k) * 22;
+    ctx.globalAlpha = k === lit ? 1 : 0.5;
+    ctx.beginPath(); ctx.moveTo(x - dir * 14, y - 20); ctx.lineTo(x, y); ctx.lineTo(x - dir * 14, y + 20); stroke(ctx, c, 3.2);
+  }
+  ctx.globalAlpha = 1;
+  txt(ctx, `${Math.round(Math.abs(rel))}°${dist}`, x0 - dir * (n * 22 + 18), y + 7, 21, c, dir > 0 ? "right" : "left", 600);
+}
+
 /** suit status, consumables, the limiting one, CO₂, pressure, heart rate, EVA time */
 function suitBlock(ctx: CanvasRenderingContext2D, { v }: HudData) {
   const s = v.suit, x = 10, w = 180;
@@ -268,6 +302,13 @@ function suitBlock(ctx: CanvasRenderingContext2D, { v }: HudData) {
   const started = v.plan?.started_at ? Date.parse(v.plan.started_at) : NaN;
   const eva = (v.mode === "out" || v.mode === "return") && Number.isFinite(started) ? hm((Date.now() - started) / 60_000) : "--:--";
   txt(ctx, `${h("hr")} ${s.pulse.toFixed(0)}  ${h("met")} ${eva}`, x, y, 15, DIM);
+  // how tired: a hairline gauge that fills as the walk takes it out of you (amber when a rest is due, red when spent)
+  y += 22;
+  const f = s.fatigue, fc = f >= 0.95 ? WARNING : f >= 0.7 ? CAUTION : DIM;
+  txt(ctx, h("ftg"), x, y, 15, fc);
+  ctx.fillStyle = FAINT; ctx.fillRect(x + 58, y - 6, 62, 2);
+  ctx.fillStyle = fc === DIM ? HUD : fc; ctx.fillRect(x + 58, y - 6, 62 * Math.max(0, Math.min(1, f)), 2);
+  txt(ctx, `${Math.round(f * 100)}%`, x + w, y, 15, fc, "right", 600);
 }
 
 /** the link, where to walk, the way home and the margin */

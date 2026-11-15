@@ -112,16 +112,28 @@ export function SlopeLegend({ className }: { className?: string }) {
   );
 }
 
-/** what walking out, an hour's work at the target and walking back are expected to use */
-export function routeBudget(route: Pts): Use {
-  const along = alongs(route as Route);
-  return addUse(addUse(routeUse(route.points, along), idleUse(WORK_MIN * 60, 0.5)), routeUse(route.points, along, 0, true));
+/**
+ * What walking out, an hour's work at the target and walking back are expected to use, how hard the
+ * walking is (mean and peak metabolic rate, W) and how tired it leaves the astronaut (0..1).
+ */
+export function routeBudget(route: Pts, tempC?: number) {
+  const along = alongs(route as Route), env = { tempC };
+  const out = routeUse(route.points, along, 0, false, env);
+  // an hour at the site, about as hard as an Apollo geology stop: working, not resting, so only half the tiredness goes
+  const work = idleUse(WORK_MIN * 60, 1, env);
+  const back = routeUse(route.points, along, 0, true, { ...env, fatigue: out.fatigue * 0.5 });
+  const use: Use = addUse(addUse(out, work), back);
+  return {
+    use, mean: (out.mean + back.mean) / 2, peak: Math.max(out.peak, back.peak),
+    tiredOut: out.fatigue, tiredBack: back.fatigue, rests: out.rests + back.rests, minutes: (out.seconds + back.seconds) / 60 + WORK_MIN,
+  };
 }
 
-export function RouteBudget({ route }: { route: Pts }) {
+export function RouteBudget({ route, tempC }: { route: Pts; tempC?: number }) {
   const { t } = useTranslation();
-  const use = useMemo(() => routeBudget(route), [route]);
+  const b = useMemo(() => routeBudget(route, tempC), [route, tempC]), use = b.use;
   const top = worst(use), level = top > 100 ? "critical" : top > 80 ? "warning" : "ok";
+  const spent = b.rests > 0 ? "critical" : Math.max(b.tiredOut, b.tiredBack) > 0.7 ? "warning" : "ok";
   const rows: [string, number][] = [[t("eva.use_o2"), use.o2], [t("eva.use_power"), use.power], [t("eva.use_water"), use.water]];
   return (
     <div className="flex flex-col gap-1.5">
@@ -137,6 +149,20 @@ export function RouteBudget({ route }: { route: Pts }) {
           <span className="text-right font-semibold tabular-nums">{Math.round(v)}%</span>
         </div>
       ))}
+      <div className="text-[11px] text-muted-foreground tabular-nums">{t("eva.use_load", { avg: Math.round(b.mean), peak: Math.round(b.peak) })}</div>
+      {/* how tired the walk leaves the astronaut: this, not the tanks, is what usually limits a walk in a suit */}
+      <div className="grid grid-cols-[7.5rem_1fr_2.5rem] items-center gap-2 text-xs" title={t("eva.tired_title")}>
+        <span className="truncate text-muted-foreground">{t("eva.tired")}</span>
+        <span className="relative h-1.5 overflow-hidden rounded-full bg-foreground/10">
+          <span className={cn("absolute inset-y-0 left-0 rounded-full", spent === "critical" ? "bg-red-400" : spent === "warning" ? "bg-amber-300" : "bg-foreground/70")} style={{ width: `${Math.min(100, Math.max(b.tiredOut, b.tiredBack) * 100)}%` }} />
+        </span>
+        <span className="text-right font-semibold tabular-nums">{Math.round(Math.max(b.tiredOut, b.tiredBack) * 100)}%</span>
+      </div>
+      {spent !== "ok" && (
+        <div className={cn("flex items-start gap-1.5 rounded-lg px-2.5 py-1.5 text-xs", spent === "critical" ? "bg-red-500/15 text-red-200" : "bg-amber-400/10 text-amber-200")}>
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />{spent === "critical" ? t("eva.tired_rests", { count: b.rests, min: Math.round(b.minutes) }) : t("eva.tired_hard")}
+        </div>
+      )}
       {level !== "ok" && (
         <div className={cn("flex items-start gap-1.5 rounded-lg px-2.5 py-1.5 text-xs", level === "critical" ? "bg-red-500/15 text-red-200" : "bg-amber-400/10 text-amber-200")}>
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />{level === "critical" ? t("eva.use_over") : t("eva.use_tight")}

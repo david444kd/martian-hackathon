@@ -58,3 +58,12 @@ No recording was added: every sound in `src/eva/audio.ts` is synthesised in the 
 ## Suit consumables model — 2026-11-15
 
 The slope factor in `src/lib/consumables.ts` is the fifth-order polynomial for the energy cost of walking on gradients from Minetti, Moia, Roi, Susta and Ferretti, "Energy cost of walking and running at extreme uphill and downhill slopes", Journal of Applied Physiology 93 (2002), divided by its value on level ground. It was measured on Earth without a suit and is used here only for the shape of the curve (uphill costs more, a gentle descent less). Suit endurance figures (8 / 9 / 8.5 hours of level walking) are chosen for the demonstration. No dataset was added. The model is a simulation for display and planning practice — not suit hardware data, not a medical or safety calculation, and no NASA endorsement is implied.
+## Real EVA figures behind the consumables model — 2026-11-15
+
+Read for `src/lib/consumables.ts` (text extracted from the NASA PDFs; no file added to the repository):
+- M. A. Carson, "Apollo Portable Life Support System Performance Report" (NASA NTRS 19730008098): design point of 4 h at an average 1200 Btu/h; mission-average metabolic rates 750–1118 Btu/h (Apollo 12, 14); consumables remaining after each EVA.
+- "Apollo 16 Time and Motion Study, Final Mission Report" (NASA MSC M72-6, NTRS 19720019460): riding the rover 442–633 Btu/h; a 297 ft traverse at 3.0 ft/s at 1112 and 1185 Btu/h; carrying the ALSEP package 180 ft in ~60 s up a ~5 % incline at 2300 Btu/h; longer traverses above 1100 Btu/h.
+- Gernhardt, Norcross, Vos, "Integrated Suit Test 1" (ICES 2008, NTRS 20080013604): Mark III suit at 121 kg and 29.6 kPa; suit weight from 63 to 308 kg did not change metabolic rate below 4.0 km/h, suit pressure had minimal influence on it.
+- Norcross and Gernhardt, "Selecting Tasks for Evaluating Human Performance as a Function of Gravity" (2011, NTRS 20110008554): incline walking differs significantly between 1/6 g, 3/8 g and 1 g.
+- The Pandolf load-carriage equation and its terrain factors (as summarised at https://en.wikipedia.org/wiki/Pandolf_equation; reported to under-predict by 12–33 % for modern loads) and Minetti et al. 2002 for descents.
+Not obtained: the EVA Walkback Test final report (NASA/TP-2009-214796). The model is a simulation shaped by these figures, with Mars gravity and assumed suit parameters; it is not validated, not suit hardware data and not a safety calculation. No NASA endorsement is implied.

@@ -56,19 +56,24 @@ export const SIMULATED_HUD = !!SIM_HUD;
 
 export function withSimulatedAlerts<T extends EvaView>(v: T, hm: Heightmap, home: [number, number]): T {
   if (!SIM_HUD) return v;
-  const h = toLocal(hm, home[0], home[1]), ru = i18n.language === "ru";
+  const h = toLocal(hm, home[0], home[1]);
+  const lang = i18n.language;
   const ev = (id: string, kind: MarsEvent["kind"], level: MarsEvent["level"], dx: number, dz: number, radius_m: number | null, title: string, text: string, source: MarsEvent["source"] = "system"): MarsEvent => {
     const [lat, lon] = radius_m == null ? [null, null] : toLatLon(hm, h.x + dx, h.z + dz);
     return { id, kind, level, zone: hm.zone.id, crew_id: null, lat, lon, radius_m, starts_at: new Date(Date.now() - 95_000).toISOString(), ends_at: null, title, text, source, acked_at: null, created_at: "" };
   };
   const label = (k: string) => i18n.t(`event_kinds.${k}.label`, { defaultValue: k }) as string;
-  const storm = ev("simhud-storm", "dust_storm", "critical", 300, -900, 400, "", ru ? "Региональная пыльная буря: видимость менее 1 км." : "Regional dust storm: visibility under 1 km.");
+  const storm = ev("simhud-storm", "dust_storm", "critical", 300, -900, 400, "", i18n.t("event_kinds.dust_storm.text") as string);
   const devil = ev("simhud-devil", "dust_devil", "warning", -700, 250, 150, "", "");
-  const solar = ev("simhud-solar", "solar_storm", "warning", 0, 0, null, "", ru ? "Радиация выше нормы. Сократите выход." : "Radiation above normal. Keep the EVA short.");
+  const solar = ev("simhud-solar", "solar_storm", "warning", 0, 0, null, "", i18n.t("event_kinds.solar_storm.text") as string);
   const rock = ev("simhud-rock", "rockfall", "info", 900, 900, 200, "", "");
-  const msg = ev("simhud-msg", "message", "info", 0, 0, null, ru ? "Отбор проб" : "Sampling", ru
+  const msgTitle = lang === "ru" ? "Отбор проб" : lang === "kk" ? "Үлгі алу" : "Sampling";
+  const msgText = lang === "ru"
     ? "Возьмите два керна у подножия уступа, к северу от точки. Фото обнажения до и после. Возвращайтесь до 15:40 по местному времени."
-    : "Take two cores at the foot of the scarp, north of the point. Photograph the outcrop before and after. Be back by 15:40 local time.", "ship");
+    : lang === "kk"
+    ? "Нүктенің солтүстігіндегі кемер түбінен екі керн алыңыз. Шығынды дейін және кейін суретке түсіріңіз. Жергілікті уақытпен 15:40 дейін оралыңыз."
+    : "Take two cores at the foot of the scarp, north of the point. Photograph the outcrop before and after. Be back by 15:40 local time.";
+  const msg = ev("simhud-msg", "message", "info", 0, 0, null, msgTitle, msgText, "ship");
   const alerts: Record<string, Alert> = {
     storm: { id: storm.id, level: "critical", title: i18n.t("hazards.on_route_title", { label: label("dust_storm") }), text: `${i18n.t("hazards.ahead", { dist: "350 m" })} ${storm.text}`, event: storm, ackable: false, scope: "route" },
     devil: { id: devil.id, level: "warning", title: i18n.t("hazards.in_zone_title", { label: label("dust_devil") }), text: "", event: devil, ackable: false, scope: "zone" },
@@ -93,3 +98,9 @@ export function simulatedTarget(hm: Heightmap, home: [number, number]): [number,
   const h = toLocal(hm, home[0], home[1]), b = ((Number(q.get("simbrg")) || 60) * Math.PI) / 180;
   return toLatLon(hm, h.x + Math.sin(b) * SIM_ROUTE, h.z - Math.cos(b) * SIM_ROUTE);
 }
+
+// ?dry — look, don't touch: the helmet reads plans, events and telemetry as usual but writes nothing
+// (no position reports, no progress, no recall or re-route, no acknowledgements, no plan status). For
+// checking the view in a second browser while somebody's EVA is running: without it every open helmet
+// page reports as that crew's astronaut.
+export const DRY_RUN = q.has("dry");

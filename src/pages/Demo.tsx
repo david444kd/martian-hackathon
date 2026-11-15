@@ -11,7 +11,7 @@ import { useAstronaut } from "../lib/astronaut";
 import { useNow } from "../lib/mars";
 import { fmtKm } from "../lib/geo";
 import { useDemoStorm, zoneStorms } from "../lib/demoStorm";
-import { Brand, ErrorNote } from "../components/common";
+import { Brand } from "../components/common";
 import { LanguageSwitcher } from "../components/LanguageSwitcher";
 
 export function Demo() {
@@ -110,9 +110,8 @@ export function Demo() {
       </main>
 
       <footer className="relative flex flex-col items-center gap-3">
-        <ErrorNote error={demo.error} />
         {storms.length > 0 && (
-          <button type="button" onClick={() => void demo.clear(storms)} disabled={demo.clearing}
+          <button type="button" onClick={() => demo.clear(storms)} disabled={demo.clearing}
             className="flex items-center gap-2 rounded-full border bg-card/60 px-4 py-2 text-sm text-muted-foreground transition-colors active:bg-muted">
             {demo.clearing ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
             {t("demo.clear", { count: storms.length })}

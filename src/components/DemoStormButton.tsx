@@ -23,7 +23,7 @@ export function DemoStormButton({ crew, zone, plan, at, events, now, className }
         {t("demo.map_button")}
       </button>
       {storms.length > 0 && (
-        <button type="button" onClick={() => void demo.clear(storms)} disabled={demo.clearing} title={t("demo.clear", { count: storms.length })}
+        <button type="button" onClick={() => demo.clear(storms)} disabled={demo.clearing} title={t("demo.clear", { count: storms.length })}
           aria-label={t("demo.clear", { count: storms.length })}
           className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60">
           {demo.clearing ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}

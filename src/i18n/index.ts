@@ -43,7 +43,7 @@ if (typeof document !== "undefined") {
 
 export function setLanguage(lang: SupportedLanguage) {
   void i18n.changeLanguage(lang);
-  localStorage.setItem(STORAGE_KEY, lang);
+  try { localStorage.setItem(STORAGE_KEY, lang); } catch { /* storage blocked: the choice lasts for this page only */ }
   if (typeof document !== "undefined") {
     document.documentElement.lang = lang;
   }

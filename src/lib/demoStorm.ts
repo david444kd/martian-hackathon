@@ -71,11 +71,11 @@ export function useDemoStorm() {
     create.mutate(row, { onSuccess: () => opts?.onSuccess?.() });
   };
 
-  /** end every active storm in the zone now */
-  const clear = async (storms: MarsEvent[]) => {
+  /** end every active storm in the zone now (a failed write is reported by the mutation cache) */
+  const clear = (storms: MarsEvent[]) => {
     const at = new Date().toISOString();
-    await Promise.all(storms.map((e) => update.mutateAsync({ id: e.id, patch: { ends_at: at } })));
+    storms.forEach((e) => update.mutate({ id: e.id, patch: { ends_at: at } }));
   };
 
-  return { raise, clear, raising: create.isPending, clearing: update.isPending, error: create.error ?? update.error };
+  return { raise, clear, raising: create.isPending, clearing: update.isPending };
 }

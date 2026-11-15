@@ -11,9 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Marker, Polyline, Tooltip } from "react-leaflet";
 import { ZoneLeafletMap } from "../components/ZoneLeafletMap";
 import { DOT, pin } from "../components/mapPins";
-import { ErrorNote } from "../components/common";
 import { useCreateCrew, useCreatePlan, useUpdatePlan } from "../lib/queries";
-import { STATUSES, type Crew, type NewPlan, type PlanStatus, type WorkPlan } from "../lib/types";
+import { STATUSES, type Crew, type NewPlan, type PlanPatch, type PlanStatus, type WorkPlan } from "../lib/types";
 import { crewHome, elevationAt, inZone, useHeightmap, useZones, type Heightmap, type Zone } from "../lib/zones";
 import { distanceM, fmtKm, fmtLL } from "../lib/geo";
 
@@ -72,7 +71,6 @@ export function NewCrewDialog({ open, onOpenChange, onCreated }: { open: boolean
                 </FieldDescription>
               </Field>
             </FieldGroup>
-            <ErrorNote error={create.error} />
             <DialogFooter className="mt-auto">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
               <Button type="submit" disabled={create.isPending || !name.trim() || !landing}>{t("dialogs.register_crew_btn")}</Button>
@@ -92,6 +90,9 @@ const toLocalInput = (iso: string | null) => {
   const d = new Date(iso);
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 };
+
+/** two timestamps naming the same moment (the database writes them as "+00:00", the browser as "Z") */
+const sameTime = (a: string | null, b: string | null) => (a && b ? Date.parse(a) === Date.parse(b) : a === b);
 
 /** create (plan = null) or edit a crew's work plan; the target is picked on the crew's zone map */
 export function PlanDialog({ crew, plan, open, onOpenChange }: { crew: Crew; plan: WorkPlan | null; open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -117,9 +118,17 @@ export function PlanDialog({ crew, plan, open, onOpenChange }: { crew: Crew; pla
     };
     const done = () => { toast.success(plan ? t("dialogs.plan_updated_toast") : t("dialogs.plan_created_toast")); onOpenChange(false); };
     if (!plan) { create.mutate(row, { onSuccess: done }); return; }
-    // a moved target makes the crew's route useless: clear it so the ship makes a new one
+    // only what was changed here: a field the ship or the helmet changed meanwhile (the status at the
+    // end of an EVA, say) is not put back to what this dialog showed when it opened
+    const patch: PlanPatch = {};
+    const same = (k: keyof NewPlan) => k === "scheduled_at" ? sameTime(row.scheduled_at, plan.scheduled_at) : row[k] === plan[k];
+    for (const k of Object.keys(row) as (keyof NewPlan)[]) if (!same(k)) Object.assign(patch, { [k]: row[k] });
+    // a moved target makes the crew's route useless: clear it so the ship makes a new one; an EVA
+    // under way on that route is stopped (the helmet would be left with nothing to follow)
     const moved = plan.target_lat !== row.target_lat || plan.target_lon !== row.target_lon;
-    update.mutate({ id: plan.id, patch: moved ? { ...row, route: null, progress_m: null } : row }, { onSuccess: done });
+    if (moved) Object.assign(patch, { route: null, progress_m: null }, plan.status === "in_progress" && !patch.status ? { status: "assigned" } : {});
+    if (!Object.keys(patch).length) { onOpenChange(false); return; }
+    update.mutate({ id: plan.id, patch }, { onSuccess: done });
   };
 
   return (
@@ -146,7 +155,8 @@ export function PlanDialog({ crew, plan, open, onOpenChange }: { crew: Crew; pla
                   <Select value={status} onValueChange={(v) => setStatus(v as PlanStatus)}>
                     <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {STATUSES.map((s) => <SelectItem key={s} value={s}>{s === "in_progress" ? t("status.eva_active") : t(`status.${s}`)}</SelectItem>)}
+                      {/* an EVA is started from the ship console (it sets the start time and ends any other EVA of the crew) */}
+                      {STATUSES.filter((s) => s !== "in_progress" || plan?.status === "in_progress").map((s) => <SelectItem key={s} value={s}>{s === "in_progress" ? t("status.eva_active") : t(`status.${s}`)}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </Field>
@@ -166,7 +176,6 @@ export function PlanDialog({ crew, plan, open, onOpenChange }: { crew: Crew; pla
                 {plan?.route && <><br />{t("dialogs.move_target_warning")}</>}
               </FieldDescription>
             </FieldGroup>
-            <ErrorNote error={create.error ?? update.error} />
             <DialogFooter className="mt-auto">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
               <Button type="submit" disabled={busy || !target || !title.trim()}>{plan ? t("dialogs.save_changes_btn") : t("dialogs.create_plan_btn")}</Button>

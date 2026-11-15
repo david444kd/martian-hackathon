@@ -11,7 +11,7 @@
 ## XR и live синхронизация
 
 - Three.js WebXR renderer (уже установлен в проекте), API `XRSession`, контроллеры WebXR Gamepad и поддержка Meta Quest Browser. Вход доступен лишь после успешной проверки `immersive-vr`.
-- Supabase Realtime Postgres Changes: [официальное описание](https://supabase.com/docs/guides/realtime/subscribing-to-database-changes). Телеметрия использует существующую таблицу `work_plans`, а не новый канал/сервер.
+- Supabase Realtime Postgres Changes: [официальное описание](https://supabase.com/docs/guides/realtime/subscribing-to-database-changes). Прогресс маршрута идёт через `work_plans.progress_m`; позиция шлема — через Realtime broadcast (канал `eva-live`) и таблицу `eva_telemetry` (`supabase/eva_telemetry.sql`). Отдельного сервера нет: [Realtime Broadcast](https://supabase.com/docs/guides/realtime/broadcast).
 - WebXR работает только в secure context и с пользовательским действием; браузер проверяет разрешение immersive-сессии: [WebXR permissions and security](https://developer.mozilla.org/en-US/docs/Web/API/WebXR_Device_API/Permissions_and_security).
 
 ## Применение и ограничения

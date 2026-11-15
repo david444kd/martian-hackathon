@@ -14,8 +14,8 @@ import { areaHazards, avoidList, crewAlerts, routeHit, type Alert } from "../lib
 import { alongs } from "../astro/checkpoints";
 import { distanceM } from "../lib/geo";
 import { conditions, eventLabel, isActive, touchesZone, type Conditions } from "../lib/mars";
-import { db } from "../lib/db";
-import { useUpdateEvent, useUpdatePlan } from "../lib/queries";
+import { db, RouteChangedError } from "../lib/db";
+import { useReplaceRoute, useUpdateEvent } from "../lib/queries";
 import { publishTelemetry, telemetryTable, useTelemetry } from "../lib/telemetry";
 import { returnRoute } from "../lib/recall";
 import { generateRoute } from "../lib/routing";
@@ -24,6 +24,7 @@ import type { EvaRuntime } from "./runtime";
 import type { SuitAudio } from "./audio";
 import { SuitModel } from "./suit";
 import i18n from "../i18n";
+import { toastError } from "../lib/errors";
 
 export const REPORT_MS = 2500;
 /** a hazard this close to the astronaut (beyond its edge) triggers the recall even off the route */
@@ -91,10 +92,10 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
   const route = plan?.route ?? localRoute ?? previewRoute;
   const stamp = route?.generated_at;
   const tele = useTelemetry(crew?.id);
-  const realPlan = useUpdatePlan(), realEvent = useUpdateEvent();
+  const realRoute = useReplaceRoute(), realEvent = useUpdateEvent();
   // ?dry: every write this helmet would make is dropped (xrPreview.ts)
   const dropped = useMemo(() => ({ mutate: () => {}, mutateAsync: async () => undefined as never }), []);
-  const updatePlan = DRY_RUN ? (dropped as unknown as typeof realPlan) : realPlan, updateEvent = DRY_RUN ? (dropped as unknown as typeof realEvent) : realEvent;
+  const replaceRoute = DRY_RUN ? (dropped as unknown as typeof realRoute) : realRoute, updateEvent = DRY_RUN ? (dropped as unknown as typeof realEvent) : realEvent;
 
   // the route in the local frame
   // the route in the local frame, bent round the outpost's buildings where it runs through them
@@ -306,6 +307,9 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     return () => clearInterval(id);
   }, [topKey, topLevel, audio]);
 
+  /** the routes this helmet wrote itself (not announced as coming from the ship) */
+  const own = useRef(new Set<string>());
+
   // ---- automatic recall: a hazard on the rest of the route or close to the astronaut
   const recallTrigger = useMemo(() => {
     if (!view || !plan || !route || plan.status !== "in_progress" || isReturn(route) || !zone) return null;
@@ -314,7 +318,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
 
   useEffect(() => {
     if (!recallTrigger || !plan || !hm || !home || !zone || !view) return;
-    const key = `${plan.id}:${stamp}:${recallTrigger.id}`;
+    const key = `${plan.id}:${stamp}:${recallTrigger.id}`, seen = stamp ?? null;
     if (tried.current.has(key)) return;
     tried.current.add(key);
     const reason = eventLabel(recallTrigger);
@@ -325,12 +329,15 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     setTimeout(() => voiceFor(hz.id, () => audio.line(atBase ? `stay-${hz.kind}` : `abort-${hz.kind}`, say(atBase ? "stay_base" : "abort_ahead", { hazard: short(hz) }), true)), 900);
     const avoid = avoidList(areaHazards(evs, zone.id, now, now + 6 * 3600_000));
     returnRoute(hm, view.at, home, avoid, reason)
-      .then((r) => updatePlan.mutateAsync({ id: plan.id, patch: { route: r, progress_m: 0 } }).then(() => r))
+      // only over the route the helmet was walking: a route the ship sent meanwhile is not overwritten
+      .then((r) => { own.current.add(r.generated_at); return replaceRoute.mutateAsync({ id: plan.id, seen, route: r, active: true }).then(() => r); })
       .then((r) => {
         setRecall({ state: "sent", reason });
         if (r.distance_m >= 30) setTimeout(() => audio.line("route-home", say("route_home", { dist: spokenDist(r.distance_m) })), Math.max(600, spokeAt + 4200 - Date.now()));
       })
       .catch((e: unknown) => {
+        // the ship or mission control changed the route first: theirs stands and is announced when it arrives
+        if (e instanceof RouteChangedError) { setRecall((s) => (s.state === "computing" ? { state: "idle", reason: "" } : s)); return; }
         setRecall({ state: "failed", reason, error: e instanceof Error ? e.message : String(e) });
         audio.alarm("critical");
         audio.line("no-way", say("no_way"), true);
@@ -340,9 +347,9 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
   // a manual recall from the ship (a return route arrives that we didn't make): announce it
   const lastStamp = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (lastStamp.current !== undefined && stamp && stamp !== lastStamp.current) {
+    if (lastStamp.current !== undefined && stamp && stamp !== lastStamp.current && !own.current.has(stamp)) {
       if (isReturn(route)) {
-        if (recall.state !== "sent" && recall.state !== "computing") {
+        if (recall.state !== "sent") {
           setRecall({ state: "sent", reason: route?.reason ?? i18n.t("evahud.recall") });
           audio.radio(); audio.alarm("critical");
           setTimeout(() => audio.line("recall-ship", say("recall_ship"), true), 800);
@@ -394,8 +401,9 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     if (mode === "complete" && plan.status === "in_progress") {
       audio.alarm("info");
       audio.line("airlock", say("airlock"));
-      // recalled before reaching the target: the plan goes back to the ship to be done again
-      updatePlan.mutate({ id: plan.id, patch: { status: reachedTarget.current ? "done" : "assigned" } });
+      // recalled before reaching the target: the plan goes back to the ship to be done again.
+      // Only if it is still the EVA walked here (the ship may have stopped it or sent a new route).
+      if (!DRY_RUN && stamp) db.finishEva(plan.id, stamp, reachedTarget.current ? "done" : "assigned").catch(toastError);
     }
   }, [arrived, mode, plan?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { reachedTarget.current = false; }, [plan?.id]);
@@ -464,9 +472,12 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
         generated_at: new Date().toISOString(), mode: route.mode,
       }));
     make
-      .then((r) => updatePlan.mutateAsync({ id: plan.id, patch: { route: r, progress_m: 0 } }))
+      .then((r) => { own.current.add(r.generated_at); return replaceRoute.mutateAsync({ id: plan.id, seen: route.generated_at, route: r, active: true }); })
       .then(() => { if (back) { note(say("route_home_updated"), "info", "suit"); audio.line("route-home-updated", say("route_home_updated")); } })
-      .catch(() => { note(say("no_reroute"), "warning", "suit"); audio.line("no-reroute", say("no_reroute")); })
+      .catch((e: unknown) => {
+        if (e instanceof RouteChangedError) return; // a new route came from the ship meanwhile: that one is followed
+        note(say("no_reroute"), "warning", "suit"); audio.line("no-reroute", say("no_reroute"));
+      })
       .finally(() => setRerouting(false));
   }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
 

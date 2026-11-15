@@ -4,7 +4,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { db } from "./db";
 import { isLive } from "./realtime";
-import type { EventPatch, NewCrew, NewEvent, NewPlan, PlanPatch, WorkPlan } from "./types";
+import type { EventPatch, NewCrew, NewEvent, NewPlan, PlanPatch, Route, WorkPlan } from "./types";
 
 const refetchInterval = () => (isLive() ? 60_000 : 3_000);
 
@@ -85,9 +85,14 @@ export function useStartEva() {
   });
 }
 
-/** helmet telemetry: no refetch here, the change comes back through realtime */
-export function useReportProgress() {
-  return useMutation({ mutationFn: ({ id, progress_m }: { id: string; progress_m: number }) => db.updatePlan(id, { progress_m }) });
+/** a new route for a plan, written only if nobody replaced the route in the meantime (db.replaceRoute) */
+export function useReplaceRoute() {
+  const refresh = useRefresh(["plans"]);
+  return useMutation({
+    mutationFn: ({ id, seen, route, active }: { id: string; seen: string | null; route: Route; active?: boolean }) => db.replaceRoute(id, seen, route, { active }),
+    // refetch on failure too: the route that won is the one to show
+    onSettled: refresh,
+  });
 }
 
 export const activePlan = <T extends { status: string; started_at: string | null }>(plans: T[] | undefined) =>

@@ -54,12 +54,11 @@ export function Helmet() {
   const evs = useMemo(() => events.data ?? [], [events.data]);
 
   const rt = useMemo(() => { const r = new EvaRuntime(); r.autoSpeed = SPEED; return r; }, []);
-  // development only: the runtime on window, so the pose can be set in tests without a rendered scene
-  useEffect(() => { if (import.meta.env.DEV) (window as unknown as { __eva?: EvaRuntime }).__eva = rt; }, [rt]);
   const audio = useMemo(() => new SuitAudio(), []);
   const suit = useMemo(() => new SuitModel(crewId ?? "none"), [crewId]);
   useEffect(() => () => audio.dispose(), [audio]);
-  useEffect(() => { if (import.meta.env.DEV) Object.assign(window, { __evaAudio: audio, __evaRt: rt }); }, [audio, rt]); // sound levels and the astronaut's pose from the console
+  // development only: sound levels and the astronaut's pose from the console (__eva: the same runtime, for tests)
+  useEffect(() => { if (import.meta.env.DEV) Object.assign(window, { __evaAudio: audio, __evaRt: rt, __eva: rt }); }, [audio, rt]);
   const [muted, setMuted] = useState(false);
   const [begun, setBegun] = useState(false);
 

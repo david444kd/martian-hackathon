@@ -15,7 +15,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 import { ZoneLeafletMap } from "./ZoneLeafletMap";
 import { DOT, pin } from "./mapPins";
-import { ErrorNote } from "./common";
 import { LEVEL_COLOR } from "./levels";
 import { useCreateEvent } from "../lib/queries";
 import { EVENT_KINDS, LEVELS, type Crew, type EventKind, type Level, type NewEvent } from "../lib/types";
@@ -176,7 +175,6 @@ export function EventDialog({ open, onOpenChange, crews, source, crew }: {
               </div>
               <FieldDescription>{startIn > 0 ? t("dialogs.starts_later_desc") : t("dialogs.starts_now_desc")} {duration === 0 && t("dialogs.no_end_desc")}</FieldDescription>
             </FieldGroup>
-            <ErrorNote error={create.error} />
             <DialogFooter className="mt-auto">
               {meta.area && <Button type="button" variant="ghost" className="mr-auto" onClick={randomize}><Dices /> {t("dialogs.random_btn")}</Button>}
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>

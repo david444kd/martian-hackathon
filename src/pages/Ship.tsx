@@ -17,7 +17,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
-import { activePlan, useCrew, useEvents, usePlans, useStartEva, useUpdateEvent, useUpdatePlan } from "../lib/queries";
+import { activePlan, useCrew, useEvents, usePlans, useReplaceRoute, useStartEva, useUpdateEvent, useUpdatePlan } from "../lib/queries";
 import { isReturn, type Crew, type MarsEvent, type Route, type WorkPlan } from "../lib/types";
 import { crewHome, inZone, useHeightmap, useZone, type Heightmap, type Zone } from "../lib/zones";
 import { generateRoute } from "../lib/routing";
@@ -145,44 +145,41 @@ function onRoute(plan: WorkPlan, zoneId: string, env: Env) {
 
 function ActiveEva({ plan, hm, env, astro, home }: { plan: WorkPlan; hm: Heightmap | undefined; env: Env; astro: AstronautView; home: [number, number] | null }) {
   const { t } = useTranslation();
-  const update = useUpdatePlan();
+  const update = useUpdatePlan(), replace = useReplaceRoute();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const set = (status: "done" | "assigned", msg: string) => update.mutate({ id: plan.id, patch: { status } }, { onSuccess: () => toast.success(msg) });
   const blocking = onRoute(plan, plan.zone, env);
 
   const back = isReturn(plan.route);
-  /** a new route from where the astronaut is now, around the anomalies (back to base when returning); the helmet switches to it */
-  async function reroute() {
-    const here = astro.at;
-    if (!hm || !here || (back && !home)) return;
+  /** a new route made from where the astronaut is now and sent to the helmet; not written if the route changed meanwhile */
+  async function send(make: (here: [number, number]) => Promise<Route>, done: string) {
+    const here = astro.at, seen = plan.route?.generated_at ?? null;
+    if (!hm || !here) return;
     setBusy(true); setErr(null);
     try {
-      const route: Route = back
-        ? await returnRoute(hm, here, home!, env.avoid, plan.route?.reason ?? t("evahud.recall"))
-        : { ...(await generateRoute(hm, here, [plan.target_lat, plan.target_lon], env.avoid)), start: { lat: here[0], lon: here[1], name: t("ship.rerouted_here") }, target: { lat: plan.target_lat, lon: plan.target_lon }, generated_at: new Date().toISOString() };
-      await update.mutateAsync({ id: plan.id, patch: { route, progress_m: 0 } });
-      toast.success(t("eva.new_route_sent_toast"));
-    } catch (e) { setErr(e); } finally { setBusy(false); }
+      let route: Route;
+      try { route = await make(here); } catch (e) { setErr(e); return; } // no route: shown here; a failed write is a toast
+      await replace.mutateAsync({ id: plan.id, seen, route, active: true });
+      toast.success(done);
+    } catch { /* reported by the mutation cache */ } finally { setBusy(false); }
   }
+  /** around the anomalies, from where the astronaut is (back to base when returning) */
+  const reroute = () => send((here) => back
+    ? returnRoute(hm!, here, home!, env.avoid, plan.route?.reason ?? t("evahud.recall"))
+    : generateRoute(hm!, here, [plan.target_lat, plan.target_lon], env.avoid).then((r): Route => ({
+      ...r, start: { lat: here[0], lon: here[1], name: t("ship.rerouted_here") }, target: { lat: plan.target_lat, lon: plan.target_lon },
+      generated_at: new Date().toISOString(), mode: plan.route?.mode,
+    })), t("eva.new_route_sent_toast"));
   /** abort the EVA: a route back to base from where the astronaut is; the helmet raises the alarm */
-  async function recall() {
-    const here = astro.at;
-    if (!hm || !here || !home) return;
-    setBusy(true); setErr(null);
-    try {
-      const route = await returnRoute(hm, here, home, env.avoid, t("evahud.recall_from_ship"));
-      await update.mutateAsync({ id: plan.id, patch: { route, progress_m: 0 } });
-      toast.success(t("ship.recall_sent_toast"));
-    } catch (e) { setErr(e); } finally { setBusy(false); }
-  }
+  const recall = () => send((here) => returnRoute(hm!, here, home!, env.avoid, t("evahud.recall_from_ship")), t("ship.recall_sent_toast"));
 
   return (
     <EvaCard plan={plan} astro={astro} className="mx-3 mb-3">
       {blocking.length > 0 && (
         <div className="mt-3 rounded-lg border border-red-500/50 bg-red-500/15 p-2 text-xs text-red-200">
           <b>{blocking.map(eventLabel).join(", ")}</b> {t("eva.blocking_ahead")}
-          <Button size="sm" variant="destructive" className="mt-2 w-full" disabled={busy || !hm} onClick={reroute}>
+          <Button size="sm" variant="destructive" className="mt-2 w-full" disabled={busy || !hm || !astro.at || (back && !home)} onClick={reroute}>
             {busy ? <Loader2 className="animate-spin" /> : <Waypoints />} {t("eva.reroute_btn")}
           </Button>
         </div>
@@ -206,7 +203,7 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
   draft: PathResult | null; onSelect: () => void; onDraft: (d: PathResult | null) => void; onProbe: (at: [number, number] | null) => void; tempC?: number;
 }) {
   const { t } = useTranslation();
-  const update = useUpdatePlan(), startEva = useStartEva();
+  const replace = useReplaceRoute(), startEva = useStartEva();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const saved = plan.route;
@@ -229,7 +226,7 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
   function send() {
     if (!draft || !start) return;
     const route: Route = { ...draft, start, target: { lat: plan.target_lat, lon: plan.target_lon }, generated_at: new Date().toISOString() };
-    update.mutate({ id: plan.id, patch: { route, progress_m: plan.status === "in_progress" ? 0 : plan.progress_m } },
+    replace.mutate({ id: plan.id, seen: saved?.generated_at ?? null, route },
       { onSuccess: () => { onDraft(null); toast.success(t("eva.route_sent_toast")); } });
   }
 
@@ -261,10 +258,10 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
             <Button size="sm" variant={draft ? "outline" : "default"} disabled={busy || !hm || !start} onClick={make}>
               {busy ? <Loader2 className="animate-spin" /> : <RouteIcon />}{saved || draft ? t("ship.make_new_route") : t("ship.make_route")}
             </Button>
-            {draft && <Button size="sm" disabled={update.isPending} onClick={send}><Send /> {t("ship.send_to_helmet")}</Button>}
+            {draft && <Button size="sm" disabled={replace.isPending} onClick={send}><Send /> {t("ship.send_to_helmet")}</Button>}
             {draft && <Button size="icon-sm" variant="ghost" onClick={() => onDraft(null)} aria-label={t("common.discard")}><X /></Button>}
           </div>
-          <ErrorNote error={err ?? update.error ?? startEva.error} />
+          <ErrorNote error={err} />
 
           {draft && (
             <div className="flex flex-col gap-2">

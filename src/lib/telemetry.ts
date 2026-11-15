@@ -19,6 +19,10 @@ let version = 0;
 let tableOk: boolean | null = null; // null: not tried yet
 let channel: RealtimeChannel | null = null;
 let channelUsers = 0;
+let poll: ReturnType<typeof setInterval> | null = null;
+let loading = false;
+/** catch up from the table this often in case a broadcast was missed (one poll per page, not per map) */
+const POLL_MS = 10_000;
 
 function emit() { version++; listeners.forEach((l) => l()); }
 
@@ -33,40 +37,58 @@ function ingest(t: EvaTelemetry) {
   emit();
 }
 
-function joinChannel() {
+/** a page that shows positions joins once per component; the channel and the poll are shared */
+function join() {
   if (!sb) return;
   channelUsers++;
-  if (channel) return;
+  if (channelUsers === 1) { void loadTable(); poll = setInterval(() => void loadTable(), POLL_MS); }
+  joinChannel();
+}
+function leave() {
+  if (!sb) return;
+  channelUsers = Math.max(0, channelUsers - 1);
+  if (channelUsers > 0) return;
+  if (poll) { clearInterval(poll); poll = null; }
+  if (channel) { void sb.removeChannel(channel); channel = null; }
+}
+
+function joinChannel() {
+  if (!sb || channel) return;
   channel = sb.channel("eva-live", { config: { broadcast: { self: false, ack: false } } });
   // broadcast only: a postgres_changes listener on a table that may not exist yet would fail the channel
   channel.on("broadcast", { event: "pose" }, ({ payload }) => ingest(payload as EvaTelemetry));
   channel.subscribe();
 }
-function leaveChannel() {
-  channelUsers--;
-  if (channelUsers <= 0 && channel && sb) { void sb.removeChannel(channel); channel = null; channelUsers = 0; }
-}
+/** the table is not there (not created yet) or this key may not use it: stop trying, broadcast only */
+const tableMissing = (e: { code?: string }) => e.code === "PGRST205" || e.code === "42P01" || e.code === "42501";
 
 async function loadTable() {
-  if (!sb || tableOk === false) return;
-  const { data, error } = await sb.from("eva_telemetry").select("*");
-  if (error) { tableOk = false; return; }
-  tableOk = true;
-  (data as EvaTelemetry[]).forEach(ingest);
+  if (!sb || tableOk === false || loading) return;
+  loading = true;
+  try {
+    const { data, error } = await sb.from("eva_telemetry").select("*");
+    if (error) { if (tableMissing(error)) tableOk = false; return; } // anything else (network): try again next poll
+    tableOk = true;
+    (data as EvaTelemetry[]).forEach(ingest);
+  } finally { loading = false; }
 }
 
 /** helmet side: send one report (broadcast + upsert) */
 export async function publishTelemetry(t: EvaTelemetry) {
   ingest(t); // our own page sees it too
   if (!sb) return;
-  if (!channel) joinChannel();
+  joinChannel(); // the helmet keeps it for as long as the page is open
   void channel?.send({ type: "broadcast", event: "pose", payload: t });
   if (tableOk === false) return;
   const { error } = await sb.from("eva_telemetry").upsert(t, { onConflict: "crew_id" });
-  if (error) {
-    // table not created yet (PGRST205 / 404) or no permission: keep broadcasting only
-    if (tableOk !== true) { tableOk = false; console.info("eva_telemetry table unavailable, position goes over broadcast only:", error.message); }
-  } else tableOk = true;
+  if (!error) { tableOk = true; return; }
+  if (tableMissing(error)) {
+    tableOk = false;
+    console.info("eva_telemetry table unavailable, position goes over broadcast only:", error.message);
+  } else if (error.code === "23503" && t.plan_id) {
+    // the plan was deleted a moment ago (foreign key): keep the position, without the plan
+    await sb.from("eva_telemetry").upsert({ ...t, plan_id: null }, { onConflict: "crew_id" });
+  } // a network error: the next report (2.5 s) tries again
 }
 
 /** is the eva_telemetry table in the database (null: not known yet) */
@@ -76,12 +98,7 @@ export const telemetryTable = () => tableOk;
 export function useTelemetry(): Map<string, Entry>;
 export function useTelemetry(crewId: string | undefined): Entry | undefined;
 export function useTelemetry(crewId?: string) {
-  useEffect(() => {
-    joinChannel();
-    void loadTable();
-    const poll = setInterval(() => void loadTable(), 10_000); // catch up if a broadcast was missed
-    return () => { clearInterval(poll); leaveChannel(); };
-  }, []);
+  useEffect(() => { join(); return leave; }, []);
   useSyncExternalStore((l) => { listeners.add(l); return () => listeners.delete(l); }, () => version);
   return arguments.length ? (crewId ? store.get(crewId) : undefined) : store;
 }

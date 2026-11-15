@@ -8,7 +8,7 @@ Updated: 2026-11-14
 - Left controller stick walks forward/back along the ship-issued route. Right stick snap-turns by 30°. Controller A teleports 8 m along the route; B calls `XRSession.end()`. Head pose remains controlled by WebXR; the route view is not tied to a following avatar. Desktop keyboard/buttons remain available.
 - Terrain stays in its existing zone/metre frame. Virtual movement is limited to the checked route and stops at active mapped hazard areas. Quest room-scale boundaries are untouched.
 - Progress heartbeats write to the existing `work_plans.progress_m` every 2.5 s while an EVA route is active. Updates compare the current route timestamp and active status; the existing Realtime table subscription feeds Ship Console and Mission Control, with the existing poll fallback.
-- Active dust storms intersecting the remaining route and active critical incidents can initiate an A* route back to the crew base. The JSON route is marked `mode: "return"`; Ship and Dispatch distinguish it. The database write rejects stale route snapshots. A failed/closed endpoint reports that a route could not be prepared; no safe-route guarantee is made.
+- Active dust storms intersecting the remaining route and active critical incidents can initiate an A* route back to the crew base. The JSON route is marked `mode: "return"`; Ship and Dispatch distinguish it. (Correction 2026-11-15: at the time only the progress write was guarded; route writes are conditional since the data-sync review below.) A failed/closed endpoint reports that a route could not be prepared; no safe-route guarantee is made.
 - Existing calculated weather/events drive the same clearly `SIMULATED` pulse, O2 reserve and suit-load readouts on Helmet, Ship and Mission Control. No real physiological sensor is connected.
 - Setup, source provenance, limits and a Quest checklist are documented in `VR_INTEGRATION.md`, `SOURCES.md` and `VR_TEST.md`.
 
@@ -24,7 +24,7 @@ Updated: 2026-11-14
 ## Data and external state
 
 - No VR terrain/photo dataset or new runtime asset was downloaded. Existing Jezero/Gale 20 m heightmaps and scene images are preserved.
-- `package.json` and `package-lock.json` are unchanged; no competing XR dependency was added. For build checks, the lockfile's 416 packages were installed in the staging copy only; `node_modules` and generated `dist` are excluded from the target update.
+- At that stage `package.json` and `package-lock.json` were unchanged; no competing XR dependency was added. (Later the branch added `i18next` / `react-i18next` and the `dev:vr` script; the lockfile matches.) For build checks, the lockfile's 416 packages were installed in the staging copy only; `node_modules` and generated `dist` are excluded from the target update.
 - Target `.env.local` is absent, so Supabase rows, Realtime delivery and event rerouting have not been run against the owner's project. Follow `VR_INTEGRATION.md` to configure it before expecting shared crew data.
 - Untethered Quest demonstration requires a trusted HTTPS deployment. The local `http://172.x.x.x` address is not assumed WebXR-secure. USB local development is documented through `adb reverse` without certificate bypasses.
 
@@ -249,3 +249,21 @@ Owner's judgement, taken as the requirement: a person cannot calmly walk 3–4 k
 - **Voice removed** on the owner's request (`audio.ts`): calls and alerts are no longer read out — neither speech synthesis nor recordings from `public/voice/`; tones, radio pips and the text on the visor remain. `line()` / `say()` are kept as empty hooks where the mission logic reports a line.
 
 Verified: `tsc -b`, `npm run build`, no lint errors; model figures computed in the browser from the shipped module; planner card seen; a 75 s autopilot walk in `?dry` mode showed the gauge at 23 %, pace 0.92, no speech queued and no writes. Not checked: reaching exhaustion and the autopilot stop in a live walk (the figures come from the same functions); the feel of the slowed pace in the headset. **NOT TESTED ON DEVICE.**
+
+## Data-sync review before merging into main — 2026-11-15
+
+Checked against the live Supabase project (read-only, publishable key) and its catalogue: `crews`, `work_plans`, `events` and `eva_telemetry` exist, all four are in `supabase_realtime`, columns and check constraints match `src/lib/types.ts`, and the open demo policies allow every write the apps make. `eva_telemetry` was missing until the owner ran `supabase/eva_telemetry.sql` during this review.
+
+Fixed in code:
+- **Route writes are conditional** (`db.replaceRoute`, `useReplaceRoute`): the helmet's automatic recall and off-route reroute, the ship's reroute / recall / "send to helmet", and Mission Control's recall write a new route only if the plan still has the route the writer saw (`route.generated_at`, or no route) and, for an EVA, is still `in_progress`. Otherwise nothing is written and the user is told the route changed (`errors.route_changed`). Before, the last writer silently won.
+- The helmet tells its own new routes from ones sent by the ship (it no longer announces its own reroute as "new route from the ship"); if its recall loses to the ship's, it stays silent instead of saying there is no way home.
+- **End of EVA at the airlock** (`db.finishEva`): the helmet sets `done` / `assigned` only if the plan is still `in_progress` on the route it walked.
+- **Plan dialog** (Mission Control): writes only the fields changed in the dialog, so an open dialog no longer puts back an old status; "EVA in progress" can no longer be chosen there (an EVA is started from the ship, which sets `started_at` and ends the crew's other EVA). Moving the target of a running EVA clears the route and returns the plan to `assigned`. The live database had a plan with `started_at = null` made this way.
+- **Failed writes are reported**: one `MutationCache` handler shows a toast for any failed write (`lib/errors.ts`); before, ending/deleting events, acknowledgements, status buttons and deletions failed silently. Inline error notes in dialogs were removed to avoid showing the same error twice.
+- **Telemetry** (`lib/telemetry.ts`): one shared 10 s catch-up poll of `eva_telemetry` per page (was one per map/card); the helmet stops using the table only when it is missing or forbidden (not after a network error); a report naming a just-deleted plan is stored without the plan instead of failing.
+- Language switch survives blocked storage; demo "clear storms" no longer leaves an unhandled promise.
+- Removed unused code: `src/astro/HelmetVisor.tsx`, `src/astro/helmet-visor.css`, `src/lib/suitTelemetry.ts`, the unrendered `ExpeditionBoard` (its `RecallButton` moved to `src/dispatch/RecallButton.tsx`; unused `expeditions.*` strings dropped), `useReportProgress`.
+
+Known and left as is: `eva_telemetry.updated_at` is the helmet's clock, so a headset clock off by more than ~20 s shows the signal as lost; the publishable key may delete or truncate every table (hackathon demo policies).
+
+Verified: `npm run typecheck`, `npm run build`, `oxlint` (no errors), en/ru/kk keys in step. The conditional writes were not exercised against the live database in this review (they would change real rows). **NOT TESTED ON DEVICE.**

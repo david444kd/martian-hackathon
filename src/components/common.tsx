@@ -9,6 +9,7 @@ import { useCrews } from "../lib/queries";
 import { isReturn, type PlanStatus, type Route, type WorkPlan } from "../lib/types";
 import type { AstronautView } from "../lib/astronaut";
 import { fmtDur, fmtKm } from "../lib/geo";
+import { errorText } from "../lib/errors";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 
 const STATUS_CLASS: Record<PlanStatus, string> = {
@@ -51,17 +52,11 @@ export function RouteStats({ route, className }: { route: Stats; className?: str
 }
 
 export function ErrorNote({ error }: { error: unknown }) {
-  const { t } = useTranslation();
+  useTranslation(); // re-render on a language change
   if (!error) return null;
-  const msg = error instanceof Error ? error.message : String(error);
-  const text = msg === "No safe walking route: the target is cut off by slopes over 25° or closed areas."
-    ? t("ship.no_safe_route")
-    : msg === "Route worker failed"
-    ? t("ship.route_worker_failed")
-    : msg;
   return (
     <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-      {text}
+      {errorText(error)}
     </div>
   );
 }

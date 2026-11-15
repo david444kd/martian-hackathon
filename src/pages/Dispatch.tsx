@@ -32,7 +32,7 @@ import { astronautAt } from "../astro/checkpoints";
 import { AlertList, ConditionsGrid, HazardAreas, OutlookBar } from "../components/alerts";
 import { EventDialog } from "../components/EventDialog";
 import { EventsPanel } from "../dispatch/EventsPanel";
-import { RecallButton } from "../dispatch/ExpeditionBoard";
+import { RecallButton } from "../dispatch/RecallButton";
 import { LEVEL_COLOR } from "../components/levels";
 import { crewAlerts, hasArea, outlook } from "../lib/hazards";
 import { conditions, eventLabel, isActive, useNow } from "../lib/mars";

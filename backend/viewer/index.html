@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jezero — просмотр данных</title>
+<style>
+  :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --panel:#161b22cc; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px system-ui,sans-serif; }
+  #ui { position:fixed; top:12px; left:12px; background:var(--panel); padding:12px 14px; border-radius:10px; max-width:340px; }
+  #ui h1 { font-size:16px; margin:0 0 8px; }
+  #ui label { display:block; margin:4px 0; }
+  #ui select { width:100%; margin:4px 0 8px; }
+  #card { margin-top:8px; color:var(--muted); white-space:pre-line; font-size:13px; }
+  #err { color:#ff7b72; white-space:pre-line; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="ui">
+  <h1>Jezero — данные ГОРИЗОНТ</h1>
+  <select id="mission"></select>
+  <label><input type="checkbox" id="hazard"> слой опасности (красное — нельзя)</label>
+  <label><input type="checkbox" id="dose"> слой дозы</label>
+  <label><input type="checkbox" id="zone"> зона возврата миссии</label>
+  <label><input type="checkbox" id="quest"> лёгкая версия (Quest) — перезагрузит</label>
+  <div id="card">загрузка…</div>
+  <div id="err"></div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { addJezero } from '../export/terrain/loader_example.js';
+
+const E = '../export/';
+const quest = location.hash === '#quest';
+document.getElementById('quest').checked = quest;
+document.getElementById('quest').onchange = e => { location.hash = e.target.checked ? 'quest' : ''; location.reload(); };
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xc9a27e); scene.fog = new THREE.Fog(0xc9a27e, 8000, 30000);
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 1, 60000);
+camera.position.set(1400, 900, 1600);
+const controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 0, 0);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x664433, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(-3000, 4000, -2000); scene.add(sun);
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+const P = p => new THREE.Vector3(p.x, p.h, -p.y);     // (x, y, h) → three.js
+const LIFT = 2;                                          // линии чуть над грунтом
+
+try {
+  const { near } = await addJezero(scene, E + 'terrain/', quest);
+  const [targets, routes] = await Promise.all([E + 'targets.json', E + 'routes.json'].map(u => fetch(u).then(r => r.json())));
+
+  // цели
+  for (const t of targets) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(t.type === 'base' ? 25 : 15),
+      new THREE.MeshBasicMaterial({ color: t.type === 'base' ? 0x39c5ff : 0xffffff }));
+    m.position.copy(P(t)).y += 20; scene.add(m);
+    const c = document.createElement('canvas'); c.width = 512; c.height = 64;
+    const g = c.getContext('2d'); g.font = 'bold 34px system-ui'; g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 6;
+    const label = `${t.id} ${t.name}`.slice(0, 30); g.strokeText(label, 4, 44); g.fillText(label, 4, 44);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+    s.scale.set(320, 40, 1); s.position.copy(m.position).y += 50; scene.add(s);
+  }
+
+  // слои: копия геометрии ближнего меша с прозрачной текстурой
+  const layerMesh = {};
+  for (const id of ['hazard', 'dose', 'zone']) {
+    const mat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+    const mesh = new THREE.Mesh(near.geometry, mat); mesh.visible = false; scene.add(mesh); layerMesh[id] = mesh;
+    document.getElementById(id).onchange = e => { mesh.visible = e.target.checked; };
+  }
+  const loadLayer = async (id, file) => {
+    const tx = await new THREE.TextureLoader().loadAsync(E + 'layers/' + file); tx.colorSpace = THREE.SRGBColorSpace;
+    layerMesh[id].material.map = tx; layerMesh[id].material.needsUpdate = true;
+  };
+  loadLayer('hazard', 'hazard.png'); loadLayer('dose', 'dose.png');
+
+  // миссии
+  const sel = document.getElementById('mission'); const group = new THREE.Group(); scene.add(group);
+  routes.missions.forEach((m, i) => sel.add(new Option(`${m.id}: ${m.name}`, i)));
+  const show = i => {
+    const m = routes.missions[i]; group.clear();
+    const line = pts => new THREE.BufferGeometry().setFromPoints(pts.map(p => P(p).add(new THREE.Vector3(0, LIFT, 0))));
+    group.add(new THREE.Line(line(m.path), new THREE.LineBasicMaterial({ color: 0x00e5ff })));
+    for (const s of m.shelters) group.add(new THREE.Line(line(s.path), new THREE.LineBasicMaterial({ color: 0xff3df2 })));
+    if (m.no_return_index != null) {
+      const x = new THREE.Mesh(new THREE.ConeGeometry(18, 60), new THREE.MeshBasicMaterial({ color: 0xff2020 }));
+      x.position.copy(P(m.path[m.no_return_index])).y += 40; x.rotation.x = Math.PI; group.add(x);
+    }
+    loadLayer('zone', `zone_${m.id}.png`);
+    const s = m.summary;
+    document.getElementById('card').textContent =
+      `Цели: ${m.target_ids.join(' → ')}\n${(s.distance_m / 1000).toFixed(2)} км · ${s.time_min} мин из 240\n` +
+      `O₂ ${s.o2_l} л (${s.o2_pct_of_supply}% запаса) · доза ${(s.dose_msv * 1000).toFixed(0)} мкЗв\n` +
+      `макс. уклон ${s.max_slope_deg}°\n` +
+      (m.no_return_index != null ? 'красный конус — точка невозврата\n' : '') +
+      (m.dropped.length ? 'выброшено: ' + m.dropped.map(d => `${d.target_id} (${d.reason})`).join('; ') + '\n' : '') +
+      'голубое — маршрут, розовое — пути к укрытию';
+  };
+  sel.onchange = e => show(+e.target.value); show(0);
+} catch (e) {
+  document.getElementById('err').textContent = 'Ошибка: ' + e.message + '\nЗапускайте через локальный сервер (см. README), а не двойным кликом.';
+  console.error(e);
+}
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>

@@ -31,6 +31,9 @@ const RECALL_NEAR_M = 400;
 /** arrival radius at the target / the base */
 const ARRIVE_M = 15;
 const OFF_ROUTE_M = 40;
+/** a spoken "you have left the route" from this far off it; quiet again once back within WARN_BACK_M */
+const WARN_OFF_M = 15;
+const WARN_BACK_M = 8;
 /** off the route by more than this for REROUTE_AFTER_MS: a new route from where the astronaut is */
 const REROUTE_M = 60;
 const REROUTE_AFTER_MS = 4000;
@@ -265,6 +268,14 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
 
   // ---- announcements: a tone by level, radio tones for calls, then the text read out
   const heard = useRef<Set<string> | null>(null);
+  // one spoken line per hazard a minute: the recall, the alert and "nearby" for the same storm do not pile up
+  const voiced = useRef(new Map<string, number>());
+  const voiceFor = (id: string, speak: () => void) => {
+    const t = Date.now();
+    if (t - (voiced.current.get(id) ?? 0) < 60_000) return;
+    voiced.current.set(id, t);
+    speak();
+  };
   const alerts = view?.alerts;
   useEffect(() => {
     if (!alerts) return;
@@ -280,8 +291,9 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     audio.alarm(worst);
     setTimeout(() => {
       const one = fresh.length === 1 && fresh[0].event.kind !== "message" ? fresh[0] : null;
-      if (one) audio.line(calloutKey(one), callout(one), worst === "critical");
-      else audio.say(fresh.slice(0, 2).map(callout).join(" "), worst === "critical");
+      // only storm calls are spoken (audio.ts); the first storm among them, if several came at once
+      const spoken = one ?? fresh.find((a) => a.event.kind === "dust_storm" || a.event.kind === "dust_devil");
+      if (spoken) voiceFor(spoken.event.id, () => audio.line(calloutKey(spoken), callout(spoken), worst === "critical"));
     }, call ? 700 : 1300);
   }, [alerts, audio]);
 
@@ -308,13 +320,15 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     const reason = eventLabel(recallTrigger);
     setRecall({ state: "computing", reason });
     audio.alarm("critical");
-    setTimeout(() => audio.line(`abort-${recallTrigger.kind}`, say("abort_ahead", { hazard: short(recallTrigger) }), true), 1900);
+    // the order on the radio: turn back first, then the route home (only when there is a walk to make)
+    const atBase = view.toBase < 30, hz = recallTrigger, spokeAt = Date.now() + 900;
+    setTimeout(() => voiceFor(hz.id, () => audio.line(atBase ? `stay-${hz.kind}` : `abort-${hz.kind}`, say(atBase ? "stay_base" : "abort_ahead", { hazard: short(hz) }), true)), 900);
     const avoid = avoidList(areaHazards(evs, zone.id, now, now + 6 * 3600_000));
     returnRoute(hm, view.at, home, avoid, reason)
       .then((r) => updatePlan.mutateAsync({ id: plan.id, patch: { route: r, progress_m: 0 } }).then(() => r))
       .then((r) => {
         setRecall({ state: "sent", reason });
-        setTimeout(() => audio.line("route-home", say("route_home", { dist: spokenDist(r.distance_m) })), 600);
+        if (r.distance_m >= 30) setTimeout(() => audio.line("route-home", say("route_home", { dist: spokenDist(r.distance_m) })), Math.max(600, spokeAt + 4200 - Date.now()));
       })
       .catch((e: unknown) => {
         setRecall({ state: "failed", reason, error: e instanceof Error ? e.message : String(e) });
@@ -356,7 +370,7 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     const reason = eventLabel(near);
     setRecall({ state: "computing", reason });
     audio.alarm("critical");
-    setTimeout(() => audio.line(`abort-${near.kind}`, say("abort_near", { hazard: short(near) }), true), 1900);
+    setTimeout(() => voiceFor(near.id, () => audio.line(`abort-${near.kind}`, say("abort_near", { hazard: short(near) }), true)), 900);
     returnRoute(hm, v.at, home, avoidList(areaHazards(evs, zone.id, now, now + 6 * 3600_000)), reason)
       .then((r) => { setRecall({ state: "sent", reason }); setLocalRoute(r); })
       .catch((e: unknown) => setRecall({ state: "failed", reason, error: e instanceof Error ? e.message : String(e) }));
@@ -385,6 +399,43 @@ export function useEva({ crew, zone, hm, home, plan, evs, now, rt, audio, suit, 
     }
   }, [arrived, mode, plan?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { reachedTarget.current = false; }, [plan?.id]);
+
+  // ---- a spoken warning as soon as the astronaut strays 15 m from the line (the reroute below waits for 60 m);
+  // again only after coming back within 8 m, or after 25 s still off it
+  const strayed = useRef<{ off: boolean; at: number }>({ off: false, at: 0 });
+  useEffect(() => {
+    const v = viewRef.current;
+    if (!v || !v.line || v.arrived || (v.mode !== "out" && v.mode !== "return") || onLine.current !== stamp) { strayed.current.off = false; return; }
+    const st = strayed.current, t = Date.now();
+    if (v.offRoute < WARN_BACK_M) { st.off = false; return; }
+    if (v.offRoute >= WARN_OFF_M && (!st.off || t - st.at > 25_000)) {
+      st.off = true; st.at = t;
+      note(say("off_line", { m: Math.round(v.offRoute) }), "warning", "suit");
+      audio.alarm("warning");
+      setTimeout(() => audio.line("off-line", say("off_line", { m: Math.round(v.offRoute) })), 900);
+    }
+  }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- the voice when the astronaut walks into the dust (and out of it)
+  const inDust = useRef<string | null>(null);
+  useEffect(() => {
+    const v = viewRef.current;
+    if (!v || !hm) return;
+    const here = { x: rt.pose.x, z: rt.pose.z };
+    const away = (e: MarsEvent) => dist2(toLocal(hm, e.lat!, e.lon!), here) - e.radius_m!;
+    const dusty = v.hazards.filter((e) => e.kind === "dust_storm" || e.kind === "dust_devil");
+    const storm = dusty.find((e) => away(e) <= 0);
+    if (storm && inDust.current !== storm.id) {
+      inDust.current = storm.id;
+      // inside it: said even if the storm was announced a moment ago (that was "ahead" / "nearby")
+      voiced.current.set(storm.id, Date.now());
+      audio.line(`storm-in-${storm.kind}`, say("in_storm", { hazard: shortInline(storm) }), true);
+    } else if (!storm && inDust.current) {
+      // out: 40 m past its edge (no flicker on the boundary), or the storm has ended
+      const was = dusty.find((e) => e.id === inDust.current);
+      if (!was || away(was) > 40) { inDust.current = null; audio.line("storm-out", say("out_of_storm")); }
+    }
+  }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- off the route: after a few seconds well away from it, a new route from here to the same end
   // (the target, or the base when returning), around the anomalies. Ship and mission control get it too.
@@ -466,6 +517,8 @@ const alertKey = (a: Alert) => `${a.id}:${a.level}:${a.title}`;
 const say = (key: string, opts: Record<string, unknown> = {}) => i18n.t(`voice.${key}`, opts) as string;
 const SPOKEN = ["dust_storm", "dust_devil", "rockfall", "solar_storm"];
 const short = (e: MarsEvent) => say(SPOKEN.includes(e.kind) ? `hazard_${e.kind}` : "hazard_other");
+/** the hazard's name inside a sentence ("inside the dust storm"); other languages keep their own case */
+const shortInline = (e: MarsEvent) => (i18n.language === "en" ? short(e).toLowerCase() : short(e));
 const spokenDist = (m: number) => {
   const km = (m / 1000).toFixed(1);
   return m < 1000 ? say("dist_m", { m: Math.round(m / 10) * 10 }) : say("dist_km", { km: i18n.language === "en" ? km : km.replace(".", ",") });

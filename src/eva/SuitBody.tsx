@@ -138,6 +138,9 @@ function cuff(m: Mats, screen: THREE.Mesh, z = 0.2) {
   return g;
 }
 
+/** two things on one sleeve */
+function both(a: THREE.Object3D, b: THREE.Object3D) { const g = new THREE.Group(); g.add(a, b); return g; }
+
 /** the mission patch sewn on the right sleeve */
 function sleevePatch(z = 0.24) {
   const p = new THREE.Mesh(new THREE.CircleGeometry(0.032, 28), new THREE.MeshStandardMaterial({ map: patch(), roughness: 0.9 }));
@@ -154,7 +157,11 @@ function aim(g: THREE.Object3D, at: THREE.Vector3, to: THREE.Vector3, roll: numb
   g.rotateZ(roll);
 }
 
-type Read = () => { o2: number; min: number; pulse: number; status: string };
+type Read = () => {
+  o2: number; min: number; pulse: number; status: string;
+  /** for the right cuff: where to walk and how far (null: no route) */
+  nav: { mode: string; bearing: number | null; left: number; etaMin: number; toBase: number; bearingBase: number; off: number } | null;
+};
 
 export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
   const { camera, gl, scene } = useThree();
@@ -162,18 +169,20 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
   useEffect(() => () => Object.values(m).forEach((x) => (x as THREE.Material).dispose()), [m]);
   const wrist = useMemo(() => display(0.074, 0.046, 256), []);
   const wristXr = useMemo(() => display(0.074, 0.046, 256), []);
+  const navCuff = useMemo(() => display(0.074, 0.046, 256), []);
+  const navCuffXr = useMemo(() => display(0.074, 0.046, 256), []);
   const chest = useMemo(() => display(0.17, 0.075, 512), []);
 
   const parts = useMemo(() => {
     // --- on a screen: forearms fixed to the view
-    const left = arm(m, 1, 0.5, cuff(m, wrist.mesh)), right = arm(m, -1, 0.5, sleevePatch());
+    const left = arm(m, 1, 0.5, cuff(m, wrist.mesh)), right = arm(m, -1, 0.5, both(cuff(m, navCuff.mesh), sleevePatch(0.33)));
     const rest = {
       l: { at: new THREE.Vector3(-0.22, -0.235, -0.46), to: new THREE.Vector3(-0.1, -0.1, -0.9), roll: 0.35 },
       r: { at: new THREE.Vector3(0.23, -0.245, -0.46), to: new THREE.Vector3(0.11, -0.11, -0.9), roll: -0.35 },
     };
     const screenArms = new THREE.Group(); screenArms.add(left, right);
     // --- VR: a glove with a short sleeve on each controller (short and with few folds: it is close to the eyes)
-    const xrL = arm(m, 1, 0.15, cuff(m, wristXr.mesh, 0.17), 2), xrR = arm(m, -1, 0.15, sleevePatch(0.19), 2);
+    const xrL = arm(m, 1, 0.15, cuff(m, wristXr.mesh, 0.17), 2), xrR = arm(m, -1, 0.15, cuff(m, navCuffXr.mesh, 0.17), 2);
     // the joints that close with the controller's grip and trigger, and how they rest
     const grasp = (a: THREE.Object3D) => {
       const fingers = a.getObjectByName("fingers")!, thumb = a.getObjectByName("thumb")!;
@@ -217,7 +226,7 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
     for (const s of [-1, 1]) { const ua = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.5, 4, 10), m.ghost); ua.position.set(s * 0.33, 1.1, -0.02); ua.rotation.set(0.25, 0, s * 0.12); body.add(ua); }
     mergeStatic(body, { cast: true, receive: false }); // the legs stay jointed (hip, knee)
     return { screenArms, left, right, rest, xrL, xrR, body, legL, legR, hands };
-  }, [m, wrist, wristXr, chest]);
+  }, [m, wrist, wristXr, navCuff, navCuffXr, chest]);
 
   const controllers = useMemo(() => [gl.xr.getController(0), gl.xr.getController(1)], [gl]);
   useEffect(() => {
@@ -289,7 +298,8 @@ export function Suit({ rt, o2 }: { rt: EvaRuntime; o2: Read }) {
     st.t = 0;
     const r = o2();
     drawCuff(wrist.canvas, r, rt); wrist.tex.needsUpdate = true;
-    if (xr) { drawCuff(wristXr.canvas, r, rt); wristXr.tex.needsUpdate = true; }
+    drawNav(navCuff.canvas, r, rt); navCuff.tex.needsUpdate = true;
+    if (xr) { drawCuff(wristXr.canvas, r, rt); wristXr.tex.needsUpdate = true; drawNav(navCuffXr.canvas, r, rt); navCuffXr.tex.needsUpdate = true; }
     drawChest(chest.canvas, r, rt); chest.tex.needsUpdate = true;
   });
   return null;
@@ -306,6 +316,38 @@ function drawCuff(c: HTMLCanvasElement, r: ReturnType<Read>, rt: EvaRuntime) {
   x.fillStyle = "#cfe0da"; x.font = "20px system-ui";
   x.fillText(`${Math.floor(r.min / 60)}h${String(Math.round(r.min % 60)).padStart(2, "0")}`, 150, 100);
   x.fillText(`♥ ${r.pulse.toFixed(0)}   ${Math.round(rt.pose.heading).toString().padStart(3, "0")}°`, 12, 140);
+}
+
+/**
+ * The right cuff: navigation. An arrow turned to where the route goes from where you are looking
+ * (straight up = ahead), the distance and time left, OUT / RETURN, and the base's bearing.
+ */
+function drawNav(c: HTMLCanvasElement, r: ReturnType<Read>, rt: EvaRuntime) {
+  const x = c.getContext("2d")!, W = c.width, H = c.height, n = r.nav;
+  x.fillStyle = "#061014"; x.fillRect(0, 0, W, H);
+  const back = n?.mode === "return" || n?.mode === "complete";
+  const col = !n || n.mode === "standby" ? "#9aa4b2" : back ? "#5fd8ff" : "#ffc46b";
+  x.fillStyle = col; x.fillRect(0, 0, W, 8);
+  x.font = "600 20px system-ui"; x.fillText(!n || n.mode === "standby" ? "NAV · STANDBY" : back ? "NAV · RETURN" : "NAV · OUT", 12, 34);
+  // the arrow
+  const target = n?.bearing ?? n?.bearingBase ?? null;
+  const cx = 52, cy = 96, R = 34;
+  x.strokeStyle = "rgba(200,230,225,0.35)"; x.lineWidth = 3; x.beginPath(); x.arc(cx, cy, R, 0, Math.PI * 2); x.stroke();
+  if (target != null) {
+    const a = ((target - rt.pose.heading) * Math.PI) / 180;
+    x.save(); x.translate(cx, cy); x.rotate(a);
+    x.fillStyle = n?.off != null && n.off > 15 ? "#fbbf24" : col;
+    x.beginPath(); x.moveTo(0, -R + 4); x.lineTo(14, 10); x.lineTo(0, 2); x.lineTo(-14, 10); x.closePath(); x.fill();
+    x.restore();
+  }
+  x.fillStyle = "#e9f4f0"; x.font = "700 40px system-ui";
+  const dist = n && n.mode !== "standby" ? n.left : n?.toBase ?? 0;
+  x.fillText(dist < 1000 ? `${Math.round(dist)} m` : `${(dist / 1000).toFixed(2)} km`, 100, 92);
+  x.fillStyle = "#cfe0da"; x.font = "20px system-ui";
+  if (n && n.mode !== "standby") x.fillText(`~${Math.round(n.etaMin)} min · base ${n.toBase < 1000 ? `${Math.round(n.toBase)} m` : `${(n.toBase / 1000).toFixed(1)} km`}`, 100, 122);
+  else x.fillText("to base", 100, 122);
+  if (n && n.off > 15) { x.fillStyle = "#fbbf24"; x.font = "600 20px system-ui"; x.fillText(`OFF ROUTE ${Math.round(n.off)} m`, 12, 150); }
+  else { x.fillStyle = "#9fb7b0"; x.font = "18px system-ui"; x.fillText(`HDG ${Math.round(rt.pose.heading).toString().padStart(3, "0")}°`, 12, 150); }
 }
 
 function drawChest(c: HTMLCanvasElement, r: ReturnType<Read>, rt: EvaRuntime) {

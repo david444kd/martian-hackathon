@@ -151,7 +151,11 @@ function groundMaterial() {
   return { mat, uniforms };
 }
 
-export function Ground({ hm, rt, anchor }: { hm: Heightmap; rt: EvaRuntime; anchor: [number, number] }) {
+/**
+ * `fine`: places with things standing on the ground (the outpost, the work site). The chunks under them
+ * always keep every DTM cell, so a coarser far-away mesh never cuts through what was set on the true surface.
+ */
+export function Ground({ hm, rt, anchor, fine = [] }: { hm: Heightmap; rt: EvaRuntime; anchor: [number, number]; fine?: { x: number; z: number }[] }) {
   const gl = useThree((s) => s.gl);
   const { mat, uniforms } = useMemo(groundMaterial, []);
   useEffect(() => () => mat.dispose(), [mat]);
@@ -194,14 +198,16 @@ export function Ground({ hm, rt, anchor }: { hm: Heightmap; rt: EvaRuntime; anch
     return { group, list };
   }, [hm, mat]);
   useEffect(() => () => chunks.list.forEach((c) => c.geos.forEach((g) => g?.dispose())), [chunks]);
-  const last = useRef({ x: NaN, z: NaN, chunks: null as typeof chunks | null });
+  const last = useRef({ x: NaN, z: NaN, chunks: null as typeof chunks | null, fine: "" });
+  const fineKey = fine.map((f) => `${Math.round(f.x)},${Math.round(f.z)}`).join(";");
   useFrame(() => {
     const p = rt.pose, s = last.current;
-    if (s.chunks === chunks && Math.hypot(p.x - s.x, p.z - s.z) < 24) return;
-    last.current = { x: p.x, z: p.z, chunks };
+    if (s.chunks === chunks && s.fine === fineKey && Math.hypot(p.x - s.x, p.z - s.z) < 24) return;
+    last.current = { x: p.x, z: p.z, chunks, fine: fineKey };
     for (const c of chunks.list) {
       const d = Math.hypot(Math.max(c.x0 - p.x, 0, p.x - c.x1), Math.max(c.z0 - p.z, 0, p.z - c.z1));
-      const lod = d < Q.lod[0] ? 0 : d < Q.lod[1] ? 1 : 2;
+      const keep = fine.some((f) => f.x > c.x0 - 80 && f.x < c.x1 + 80 && f.z > c.z0 - 80 && f.z < c.z1 + 80);
+      const lod = keep || d < Q.lod[0] ? 0 : d < Q.lod[1] ? 1 : 2;
       if (lod === c.lod) continue;
       c.lod = lod;
       c.mesh.geometry = c.geos[lod] ??= chunkGeometry(hm, c.ci, c.cj, STEPS[lod]);

@@ -1,8 +1,8 @@
 // What you hear inside the helmet, all synthesised with Web Audio (no recordings): the life-support
 // fan, your own breathing (its rate follows the suit model), muffled footsteps carried through the
 // suit, the storm, the habitat's hum and the route beacon's pip from the side they are on, quiet tones
-// for alerts and for a call from the ship. No voice: calls and alerts are not read out (removed on the
-// owner's request) — their text is on the visor. Browsers allow sound only after a user gesture:
+// for alerts and for a call from the ship. A voice (speech synthesis, or a recording from public/voice)
+// only for leaving the route and for dust storms; every other call is text on the visor. Browsers allow sound only after a user gesture:
 // `start()` is called from the "Begin EVA" / "Enter VR" buttons. Mars' thin air carries almost no
 // sound; this is the suit.
 // In a dust storm (wind.ts, written by the scene every frame) the helmet fills with it: a low rumble,
@@ -14,8 +14,54 @@
 
 import { wind } from "./wind";
 import { ears, type Spot } from "./ears";
+import i18n from "../i18n";
 
 export type Tone = "info" | "warning" | "critical";
+
+type VoiceLang = "en" | "ru" | "kk";
+/** the language the helmet speaks: the interface language */
+const voiceLang = (): VoiceLang => (i18n.language === "ru" || i18n.language === "kk" ? i18n.language : "en");
+const BCP: Record<VoiceLang, string> = { en: "en-US", ru: "ru-RU", kk: "kk-KZ" };
+/** voices to try, in order: the language itself, then (few systems speak Kazakh) Russian, then English */
+const FALLBACK: Record<VoiceLang, string[]> = { en: ["en"], ru: ["ru", "en"], kk: ["kk", "ru", "en"] };
+
+/**
+ * The most human-sounding voice the system has for the helmet's language: neural "Natural"/"Online"
+ * voices (Microsoft Aria / Jenny / Guy, Svetlana / Dmitry in Edge and Windows 11), then Google's, then
+ * Apple's (Samantha, Milena / Yuri), and only then the plain default.
+ */
+const chosen = new Map<VoiceLang, SpeechSynthesisVoice>();
+function pickVoice(lang: VoiceLang): SpeechSynthesisVoice | null {
+  const hit = chosen.get(lang);
+  if (hit) return hit;
+  const all = typeof speechSynthesis !== "undefined" ? speechSynthesis.getVoices() : [];
+  const pool = FALLBACK[lang].map((l) => all.filter((v) => v.lang.toLowerCase().startsWith(l))).find((p) => p.length);
+  if (!pool) return null; // voices load asynchronously: try again next time
+  const score = (v: SpeechSynthesisVoice) => {
+    const n = v.name.toLowerCase();
+    let s = 0;
+    if (/natural|neural|online/.test(n)) s += 50;
+    if (/premium|enhanced/.test(n)) s += 35;
+    if (n.includes("google")) s += 25;
+    if (/aria|jenny|guy|ava|andrew|emma|brian|samantha|dmitry|дмитрий|yuri|юрий|svetlana|светлана|milena|милена|daulet|aigul/.test(n)) s += 10;
+    if (/irina|ирина|pavel|павел|david|zira|desktop/.test(n)) s -= 10; // the old robotic SAPI voices
+    return s;
+  };
+  const best = [...pool].sort((a, b) => score(b) - score(a))[0];
+  chosen.set(lang, best);
+  return best;
+}
+if (typeof speechSynthesis !== "undefined") speechSynthesis.addEventListener?.("voiceschanged", () => { chosen.clear(); });
+
+/** recordings in public/voice/<lang>/<key>.mp3: null = there is none (checked once per language and key) */
+const recordings = new Map<string, Promise<AudioBuffer | null>>();
+
+/**
+ * Which lines are spoken. The voice was taken out on the owner's request and brought back on
+ * 2026-11-15 for these only: leaving the route, and dust storms / dust devils (on the route, nearby,
+ * you are in it, turn back). Every other call stays as text on the visor with its tone.
+ */
+const SPOKEN = /^(off-route|off-line|in-storm|storm-|abort-|stay-|alert-dust_(storm|devil)|route-home)/;
 
 export class SuitAudio {
   ctx: AudioContext | null = null;
@@ -47,6 +93,7 @@ export class SuitAudio {
   private inhale = true;
   private nextStep = 0;
   muted = false;
+  speaking = false;
 
   get running() { return this.ctx?.state === "running"; }
 
@@ -289,15 +336,56 @@ export class SuitAudio {
   }
 
   /**
-   * A call or an alert used to be read out here (a recording or speech synthesis). The voice was
-   * removed on the owner's request: the visor shows the text and the tones mark its arrival. Kept as
-   * the place the mission logic reports a spoken line, should a voice ever come back.
+   * A fixed call: a human recording from public/voice/<key>.mp3 when there is one (played through a
+   * radio filter: band-limited, a little crackle), otherwise the same text by speech synthesis.
    */
-  line(_key: string, _text: string, _urgent = false) { /* no voice */ }
-  say(_text: string, _urgent = false) { /* no voice */ }
+  line(key: string, text: string, urgent = false) {
+    const ctx = this.ctx;
+    if (this.muted || !SPOKEN.test(key)) return;
+    if (!ctx) { this.say(text, urgent); return; }
+    const path = `${voiceLang()}/${key}`;
+    let rec = recordings.get(path);
+    if (!rec) {
+      rec = fetch(`/voice/${path}.mp3`)
+        .then((r) => (r.ok && (r.headers.get("content-type") ?? "").includes("audio") ? r.arrayBuffer() : null))
+        .then((b) => (b ? ctx.decodeAudioData(b) : null))
+        .catch(() => null);
+      recordings.set(path, rec);
+    }
+    void rec.then((buf) => {
+      if (!buf || ctx.state !== "running") { this.say(text, urgent); return; }
+      const src = ctx.createBufferSource(), hp = ctx.createBiquadFilter(), lp = ctx.createBiquadFilter(), g = ctx.createGain(), sh = ctx.createWaveShaper();
+      src.buffer = buf; hp.type = "highpass"; hp.frequency.value = 320; lp.type = "lowpass"; lp.frequency.value = 3200;
+      const curve = new Float32Array(256); for (let i = 0; i < 256; i++) { const x = i / 128 - 1; curve[i] = Math.tanh(x * 1.8); }
+      sh.curve = curve; g.gain.value = 1.1;
+      src.connect(hp).connect(lp).connect(sh).connect(g).connect(this.master);
+      const t = ctx.currentTime;
+      this.burst(t, 0.06, "highpass", 2200, 0.04);
+      // in a storm the voice comes through static
+      if (wind.storm > 0.4) this.burst(t + 0.05, buf.duration, "bandpass", 2100, 0.05 * wind.storm, this.white);
+      src.start(t + 0.05);
+      src.onended = () => this.burst(ctx.currentTime, 0.08, "highpass", 2200, 0.045); // squelch tail
+    });
+  }
+
+  /** read a call out loud; only through line(), so the filter above applies */
+  private say(text: string, urgent = false) {
+    if (this.muted || !("speechSynthesis" in window)) return;
+    const u = new SpeechSynthesisUtterance(text);
+    const lang = voiceLang(), voice = pickVoice(lang);
+    if (voice) u.voice = voice;
+    u.lang = voice?.lang ?? BCP[lang];
+    // spoken plainly, like on the radio: natural pitch, a little quicker when it matters
+    u.rate = urgent ? 1.1 : 1.0; u.pitch = 1; u.volume = 1;
+    u.onstart = () => { this.speaking = true; };
+    u.onend = u.onerror = () => { this.speaking = false; };
+    if (urgent) window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  }
 
   dispose() {
     clearInterval(this.timer);
+    window.speechSynthesis?.cancel();
     void this.ctx?.close().catch(() => {});
     this.ctx = null;
   }

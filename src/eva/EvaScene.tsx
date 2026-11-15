@@ -87,7 +87,11 @@ function Surface({ hm, home, rt, view, route, mode, storm, windDeg, lmst, anchor
   const setButtes = useCallback((b: Closed[]) => { solids.current.buttes = b; rt.solid = [...solids.current.base, ...b]; }, [rt]);
   const suitRead = useCallback(() => {
     const s = view.current?.suit;
-    return { o2: s?.o2Pct ?? 100, min: s?.remainingMin ?? 480, pulse: s?.pulse ?? 72, status: s?.status ?? "NOMINAL" };
+    const v = view.current;
+    return {
+      o2: s?.o2Pct ?? 100, min: s?.remainingMin ?? 480, pulse: s?.pulse ?? 72, status: s?.status ?? "NOMINAL",
+      nav: v ? { mode: v.mode, bearing: v.guide?.bearing ?? null, left: v.left, etaMin: v.etaMin, toBase: v.toBase, bearingBase: v.bearingBase, off: v.offRoute } : null,
+    };
   }, [view]);
   const line = rt.line;
   const back = mode === "return" || mode === "complete";
@@ -95,6 +99,8 @@ function Surface({ hm, home, rt, view, route, mode, storm, windDeg, lmst, anchor
   const tubeGeo = useMemo(() => (route ? tube(hm, route, new THREE.Matrix4(), 0.35, 0.07) : null), [hm, route]);
   useEffect(() => () => tubeGeo?.dispose(), [tubeGeo]);
   const end = useMemo<P2 | null>(() => (route ? toLocal(hm, route.target.lat, route.target.lon) : null), [hm, route]);
+  // where things stand on the ground: the terrain under them stays at full detail at any distance
+  const fineSpots = useMemo(() => [homeL, ...(end ? [end] : [])], [homeL, end]);
   const solidHazards = useMemo(() => hazards.filter((e) => e.kind !== "dust_storm" && e.kind !== "dust_devil"), [hazards]);
   const dusty = useMemo(() => hazards.filter((e) => e.kind === "dust_storm" || e.kind === "dust_devil").map((e) => ({ e, at: toLocal(hm, e.lat!, e.lon!) })), [hm, hazards]);
   // the ground shader veils the ground before the two nearest storm fronts
@@ -111,7 +117,7 @@ function Surface({ hm, home, rt, view, route, mode, storm, windDeg, lmst, anchor
       <Environment sun={sun} />
       <Lights rt={rt} dir={sun} />
       <HelmetLamp />
-      <Ground hm={hm} rt={rt} anchor={anchor} />
+      <Ground hm={hm} rt={rt} anchor={anchor} fine={fineSpots} />
       <Rocks hm={hm} rt={rt} route={line} />
       <Outpost hm={hm} home={homeL} onSolid={setBase} />
       <Buttes hm={hm} home={homeL} line={line} rt={rt} onSolid={setButtes} />

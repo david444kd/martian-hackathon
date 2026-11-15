@@ -1,6 +1,7 @@
 // Things on the surface around the astronaut, beyond the measured ground (Ground.tsx) and the air
 // (atmo.tsx, Storm.tsx): scattered rocks near your boots, the route's ground markers and the target
 // beacon. The rocks are authored visual dressing placed on the measured ground: not surveyed objects.
+import { onSlope } from "./seat";
 import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
@@ -11,6 +12,8 @@ import { groundY, pointAlong, type P2, type Polyline } from "./frame";
 import { Q } from "./quality";
 import type { EvaRuntime } from "./runtime";
 import { boulder } from "./textures";
+
+const JITTER = new THREE.Quaternion(), JE = new THREE.Euler();
 
 // ------------------------------------------------------------------------------------------------
 // rocks: deterministic per 5 m cell, laid out again round the astronaut every 16 m they walk. Pebbles
@@ -95,8 +98,10 @@ export function Rocks({ hm, rt, route }: { hm: Heightmap; rt: EvaRuntime; route:
         }
         const v = big ? 3 + Math.floor(hash(i, j, 50 + r) * 2) : Math.floor(hash(i, j, 50 + r) * 3), m = refs.current[v];
         if (!m || counts[v] >= (big ? MAX_BIG : MAX_SMALL)) continue;
-        o.position.set(x, groundY(hm, x, z) - size * 0.08, z);
-        o.rotation.set((hash(i, j, 60 + r) - 0.5) * 0.4, hash(i, j, 70 + r) * Math.PI * 2, (hash(i, j, 80 + r) - 0.5) * 0.4);
+        // stood on the slope where it lies (the ground's normal over the rock's own size), bedded in a little
+        o.position.set(x, groundY(hm, x, z) - size * 0.14, z);
+        onSlope(hm, x, z, hash(i, j, 70 + r) * Math.PI * 2, Math.max(0.5, size), o.quaternion);
+        o.quaternion.multiply(JITTER.setFromEuler(JE.set((hash(i, j, 60 + r) - 0.5) * 0.3, 0, (hash(i, j, 80 + r) - 0.5) * 0.3)));
         o.scale.set(size * (0.8 + hash(i, j, 90 + r) * 0.7), size * (0.7 + hash(i, j, 93 + r) * 0.5), size * (0.8 + hash(i, j, 95 + r) * 0.5));
         o.updateMatrix();
         m.setMatrixAt(counts[v], o.matrix);
@@ -188,7 +193,7 @@ export function GroundGuide({ hm, rt, line, color }: { hm: Heightmap; rt: EvaRun
     for (let m = from + 3; m <= Math.min(line.length, rt.progress + 75) && n < 40; m += 3) {
       const { p, dir } = pointAlong(line, m);
       o.position.set(p.x, groundY(hm, p.x, p.z) + 0.06, p.z);
-      o.rotation.set(0, Math.atan2(-dir.x, -dir.z), 0);
+      onSlope(hm, p.x, p.z, Math.atan2(-dir.x, -dir.z), 0.6, o.quaternion);
       o.scale.setScalar(1);
       o.updateMatrix(); a.setMatrixAt(n++, o.matrix);
     }
@@ -198,7 +203,7 @@ export function GroundGuide({ hm, rt, line, color }: { hm: Heightmap; rt: EvaRun
       if (Math.abs(((m % 3) + 3) % 3) < 0.6) continue; // leave room for the chevrons
       const { p, dir } = pointAlong(line, m);
       o.position.set(p.x, groundY(hm, p.x, p.z) + 0.05, p.z);
-      o.rotation.set(0, Math.atan2(-dir.x, -dir.z), 0);
+      onSlope(hm, p.x, p.z, Math.atan2(-dir.x, -dir.z), 0.6, o.quaternion);
       o.updateMatrix(); d.setMatrixAt(k++, o.matrix);
     }
     d.count = k; d.instanceMatrix.needsUpdate = true; d.computeBoundingSphere();
@@ -217,19 +222,23 @@ export function GroundGuide({ hm, rt, line, color }: { hm: Heightmap; rt: EvaRun
 /** a slim beacon mast with a blinking top over the route's end (target, or the base when returning) */
 export function Beacon({ hm, at, color, height = 4 }: { hm: Heightmap; at: P2; color: string; height?: number }) {
   const y = groundY(hm, at.x, at.z);
+  const slope = useMemo(() => onSlope(hm, at.x, at.z, 0, 3), [hm, at.x, at.z]);
   const top = useRef<THREE.MeshBasicMaterial>(null), halo = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
     const on = (clock.elapsedTime % 1.6) < 0.25;
     if (top.current) top.current.opacity = on ? 1 : 0.35;
-    if (halo.current) halo.current.scale.setScalar(1 + ((clock.elapsedTime * 0.6) % 1) * 6);
+    if (halo.current) halo.current.scale.setScalar(1 + ((clock.elapsedTime * 0.6) % 1) * 3);
   });
   return (
     <group position={[at.x, y, at.z]}>
       <mesh position={[0, height / 2, 0]}><cylinderGeometry args={[0.04, 0.06, height, 8]} /><meshStandardMaterial color="#cfc7b8" roughness={0.5} metalness={0.4} /></mesh>
       <mesh position={[0, height + 0.15, 0]}><sphereGeometry args={[0.16, 12, 8]} /><meshBasicMaterial ref={top} color={color} transparent /></mesh>
-      <mesh ref={halo} position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[1.4, 1.6, 48]} /><meshBasicMaterial color={color} transparent opacity={0.35} side={THREE.DoubleSide} depthWrite={false} />
-      </mesh>
+      {/* the pulse ring lies on the slope (and draws over the ground where the slope curves) */}
+      <group quaternion={slope}>
+        <mesh ref={halo} position={[0, 0.1, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={4}>
+          <ringGeometry args={[1.4, 1.6, 48]} /><meshBasicMaterial color={color} transparent opacity={0.35} side={THREE.DoubleSide} depthWrite={false} polygonOffset polygonOffsetFactor={-4} />
+        </mesh>
+      </group>
       {/* a tall faint light column so it can be found from far away */}
       <mesh position={[0, 60, 0]}><cylinderGeometry args={[0.35, 0.35, 120, 8, 1, true]} /><meshBasicMaterial color={color} transparent opacity={0.22} depthWrite={false} side={THREE.DoubleSide} /></mesh>
     </group>

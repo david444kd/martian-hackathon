@@ -30,9 +30,10 @@ import { isFresh, useTelemetry } from "../lib/telemetry";
 import { NewCrewDialog, PlanDialog } from "../dispatch/dialogs";
 import { astronautAt } from "../astro/checkpoints";
 import { AlertList, ConditionsGrid, HazardAreas, OutlookBar } from "../components/alerts";
-import { LEVEL_COLOR } from "../components/levels";
 import { EventDialog } from "../components/EventDialog";
 import { EventsPanel } from "../dispatch/EventsPanel";
+import { RecallButton } from "../dispatch/ExpeditionBoard";
+import { LEVEL_COLOR } from "../components/levels";
 import { crewAlerts, hasArea, outlook } from "../lib/hazards";
 import { conditions, eventLabel, isActive, useNow } from "../lib/mars";
 import { LanguageSwitcher } from "../components/LanguageSwitcher";
@@ -157,10 +158,11 @@ function CrewPanel({ crew, plans, evs, now, onClose }: { crew: Crew; plans: Work
         <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label={t("common.close")}><X /></Button>
       </div>
 
-      {active?.route && <EvaCard plan={active} astro={astro} className="mx-4 mb-2" />}
+      {active?.route && <EvaCard plan={active} astro={astro} className="mx-4 mb-2"><RecallButton crew={crew} plan={active} astro={astro} evs={evs} now={now} className="mt-2" /></EvaCard>}
       {!active && astro.live && astro.t && (
         <div className="mx-4 mb-2 rounded-xl border border-live/30 bg-live/5 px-3 py-2 text-xs text-muted-foreground">
           <span className="text-live">{t("dispatch.helmet_live")}</span> · {t("dispatch.on_surface_no_eva")} · {fmtLL(astro.t.lat, astro.t.lon)}
+          <RecallButton crew={crew} plan={null} astro={astro} evs={evs} now={now} className="mt-2" />
         </div>
       )}
 

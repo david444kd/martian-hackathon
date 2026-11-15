@@ -21,6 +21,7 @@ import { Q } from "./quality";
 import { boulder, foil, hull, label, patch, solar, strata, tyre } from "./textures";
 
 import { HAB_OFFSET, outpostSolids, ROVER } from "./layout";
+import { drapedDisc, groundRange, seat } from "./seat";
 
 function makeMats() {
   const h = hull([4, 1]), h2 = hull([2, 1]), f = foil([6, 2]), f1 = foil([2, 2]), sp = solar([1, 1]), ty = tyre();
@@ -100,9 +101,11 @@ function Halos({ lights }: { lights: Light[] }) {
 
 const rbox = (w: number, h: number, d: number, r: number) => new RoundedBoxGeometry(w, h, d, 4, r);
 
-/** the lowest ground under a footprint: a structure sits on it without floating */
-const footY = (hm: Heightmap, x: number, z: number, r: number) =>
-  Math.min(groundY(hm, x, z), groundY(hm, x + r, z), groundY(hm, x - r, z), groundY(hm, x, z + r), groundY(hm, x, z - r));
+/**
+ * The floor of a structure on legs or cradles: the HIGHEST ground under its footprint, so nothing of it
+ * cuts into an uphill slope; its legs, cradles and skirts reach down to the ground wherever it is lower.
+ */
+const floorY = (hm: Heightmap, x: number, z: number, r: number) => groundRange(hm, x, z, r).hi;
 
 /** a strut between two points */
 function Strut({ a, b, r = 0.05, material }: { a: [number, number, number]; b: [number, number, number]; r?: number; material: THREE.Material }) {
@@ -117,14 +120,23 @@ function Strut({ a, b, r = 0.05, material }: { a: [number, number, number]; b: [
 export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Heightmap; home: P2; onSolid: (s: Closed[]) => void }) {
   const m = useMats();
   const H = { x: home.x, z: home.z + HAB_OFFSET };
-  const y = footY(hm, H.x, H.z, 8);
+  const y = floorY(hm, H.x, H.z, 5.8);
+  // the lab module, the tanks and the rover sit on their own ground (heights relative to the habitat's floor)
+  const LAB = { x: -17.2, r: 5.2 };
+  const labY = floorY(hm, H.x + LAB.x, H.z, LAB.r) - y + 2.45;        // the module's axis
+  const tank = groundRange(hm, H.x - 17, H.z - 6, 2.7), tankY = tank.hi - y, tankDrop = tank.hi - tank.lo;
+  const rover = seat(hm, H.x + ROVER.x, H.z + ROVER.z, ROVER.yaw, 2.5, 1.65, 0.04);
+  const cargo = seat(hm, H.x + 9.8, H.z + 9.3, 0.4, 1.9, 0.75, 0.04);
   /** ground height at an offset from the habitat, relative to its floor */
   const g = (dx: number, dz: number) => groundY(hm, H.x + dx, H.z + dz) - y;
   useEffect(() => { onSolid(outpostSolids(home)); }, [H.x, H.z]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // every light of the outpost: airlock status and floods, the mast beacon, the pad's edge, the path, the rover's headlights
   const lights = useMemo<Light[]>(() => {
-    const cy = Math.cos(ROVER.yaw), sy = Math.sin(ROVER.yaw), ry = g(ROVER.x, ROVER.z);
+    const lamp = (lx: number, lz: number): [number, number, number] => {
+      const v = new THREE.Vector3(lx, 1.55, lz).applyQuaternion(rover.q);
+      return [ROVER.x + v.x, rover.y - y + v.y, ROVER.z + v.z];
+    };
     return [
       { p: [0, 4.95, 5.47], color: "green", size: 0.06, glow: 0.7 },
       { p: [-1.3, 4.3, 5.47], color: "lamp", size: 0.055, glow: 1 }, { p: [1.3, 4.3, 5.47], color: "lamp", size: 0.055, glow: 1 },
@@ -134,7 +146,7 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
         return { p: [px, g(px, pz) + 0.25, pz], color: k % 3 ? "lamp" : "green", size: 0.06, glow: 0.8 };
       }),
       ...[10.5, 13, 15.5].flatMap((z) => [-1.7, 1.7].map((x): Light => ({ p: [x, g(x, z) + 0.63, z], color: "lamp", size: 0.04, glow: 0.5 }))),
-      ...[-0.75, 0.75].map((z): Light => ({ p: [ROVER.x + 2.43 * cy + z * sy, ry + 1.55, ROVER.z - 2.43 * sy + z * cy], color: "lamp", size: 0.07, glow: 1.1 })),
+      ...[-0.75, 0.75].map((z): Light => ({ p: lamp(2.43, z), color: "lamp", size: 0.07, glow: 1.1 })),
     ];
   }, [hm, H.x, H.z]); // eslint-disable-line react-hooks/exhaustive-deps
   const dish = useMemo(() => new THREE.LatheGeometry(Array.from({ length: 12 }, (_, i) => new THREE.Vector2((i / 11) * 1.5, ((i / 11) ** 2) * 0.55)), 36), []);
@@ -152,6 +164,8 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
   }, []);
   useEffect(() => () => { dish.dispose(); padTex.dispose(); }, [dish, padTex]);
   const north = hm.zone.base.lat >= 0 ? 1 : -1; // panels tilt towards the equator
+  const padGeo = useMemo(() => drapedDisc(hm, H.x, H.z - 36, y, 10, 0.06), [hm, H.x, H.z, y]);
+  useEffect(() => () => padGeo.dispose(), [padGeo]);
 
   return (
     <group position={[H.x, y, H.z]}>
@@ -232,13 +246,13 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
         })}
 
         {/* ---- lab module on cradles, joined by a tunnel */}
-        <group position={[-17.2, 2.6, 0]}>
+        <group position={[LAB.x, labY, 0]}>
           <mesh material={m.hull} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[2.35, 2.35, 9, 40]} /></mesh>
           {[-1, 1].map((s) => <mesh key={s} material={m.hull2} position={[s * 4.5, 0, 0]} scale={[0.42, 1, 1]}><sphereGeometry args={[2.35, 32, 20]} /></mesh>)}
           {[-4.5, -1.5, 1.5, 4.5].map((x) => <mesh key={x} material={m.metal} position={[x, 0, 0]} rotation={[0, Math.PI / 2, 0]}><torusGeometry args={[2.37, 0.06, 8, 40]} /></mesh>)}
           {[-3, 0, 3].map((x) => (
             <group key={x} position={[x, 0, 0]}>
-              <mesh material={m.steel} position={[0, (0.6 + g(-17.2 + x, 0)) / 2 - 2.6, 0]}><boxGeometry args={[0.35, Math.max(0.3, 0.6 - g(-17.2 + x, 0)), 3.8]} /></mesh>
+              {(() => { const top = -2.15, foot = Math.min(g(LAB.x + x, -1.6), g(LAB.x + x, 1.6)) - labY - 0.25; return <mesh material={m.steel} position={[0, (top + foot) / 2, 0]}><boxGeometry args={[0.35, top - foot, 3.8]} /></mesh>; })()}
               <mesh material={m.lit} position={[0, 0.85, 2.21]} rotation={[-0.37, 0, 0]}><boxGeometry args={[1.1, 0.5, 0.05]} /></mesh>
               <mesh material={m.glass} position={[0, 0.85, -2.21]} rotation={[0.37, 0, 0]}><boxGeometry args={[1.1, 0.5, 0.05]} /></mesh>
             </group>
@@ -247,17 +261,21 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
           <mesh material={m.solar} position={[0, 2.5, 0]}><boxGeometry args={[7, 0.05, 2.4]} /></mesh>
           <mesh material={m.metal} position={[0, 2.44, 0]}><boxGeometry args={[7.1, 0.06, 2.5]} /></mesh>
         </group>
-        <mesh material={m.foil1} position={[-9.2, 3.1, 0]} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[1.05, 1.05, 7.4, 24]} /></mesh>
-        {[-6.2, -8.2, -10.2, -12.2].map((x) => <mesh key={x} material={m.metal} position={[x, 3.1, 0]} rotation={[0, Math.PI / 2, 0]}><torusGeometry args={[1.1, 0.07, 8, 28]} /></mesh>)}
-        {[-7.5, -11].map((x) => <Strut key={x} a={[x, 2.1, 0]} b={[x, g(x, 0), 0]} r={0.08} material={m.steel} />)}
+        <Strut a={[-5.5, 3.1, 0]} b={[-12.9, labY + 0.5, 0]} r={1.05} material={m.foil1} />
+        {[-6.2, -8.2, -10.2, -12.2].map((x) => {
+          // a ring round the sloping tunnel: facing along it (+X turned up or down by the slope)
+          const ty = 3.1 + ((x + 5.5) / -7.4) * (labY + 0.5 - 3.1), tilt = Math.atan2(-(labY + 0.5 - 3.1), 7.4);
+          return <mesh key={x} material={m.metal} position={[x, ty, 0]} rotation={[0, Math.PI / 2, tilt, "ZYX"]}><torusGeometry args={[1.1, 0.07, 8, 28]} /></mesh>;
+        })}
+        {[-7.5, -11].map((x) => { const ty = 3.1 + ((x + 5.5) / -7.4) * (labY + 0.5 - 3.1); return <Strut key={x} a={[x, ty - 1, 0]} b={[x, g(x, 0) - 0.2, 0]} r={0.08} material={m.steel} />; })}
 
         {/* ---- gas tanks behind the lab: gold-wrapped spheres on a rack */}
-        <group position={[-17, g(-17, -6), -6]}>
+        <group position={[-17, tankY, -6]}>
           {[-1.8, 0, 1.8].map((x, k) => (
             <group key={x} position={[x, 1.15, 0]}>
               <mesh material={k === 1 ? m.white : m.foil1}><sphereGeometry args={[0.85, 28, 20]} /></mesh>
               <mesh material={m.metal} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[0.86, 0.035, 8, 28]} /></mesh>
-              <mesh material={m.steel} position={[0, -0.75, 0]}><cylinderGeometry args={[0.5, 0.62, 0.8, 12, 1, true]} /></mesh>
+              <mesh material={m.steel} position={[0, -0.35 - (0.85 + tankDrop) / 2, 0]}><cylinderGeometry args={[0.5, 0.62, 0.85 + tankDrop, 12, 1, true]} /></mesh>
               <mesh material={m.metal} position={[0, 0.92, 0]}><cylinderGeometry args={[0.07, 0.07, 0.25, 10]} /></mesh>
             </group>
           ))}
@@ -270,10 +288,9 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
           const cx = 18 + (i % 4) * 4.4, cz = -6.5 + Math.floor(i / 4) * 6, gy = g(cx, cz);
           return (
             <group key={i} position={[cx, gy, cz]}>
-              <Strut a={[-1.4, 0, 0.5 * north]} b={[-1.4, 2.25, 0.5 * north]} r={0.045} material={m.metal} />
-              <Strut a={[1.4, 0, 0.5 * north]} b={[1.4, 2.25, 0.5 * north]} r={0.045} material={m.metal} />
-              <Strut a={[-1.4, 0, -0.9 * north]} b={[-1.4, 1.05, -0.9 * north]} r={0.045} material={m.metal} />
-              <Strut a={[1.4, 0, -0.9 * north]} b={[1.4, 1.05, -0.9 * north]} r={0.045} material={m.metal} />
+              {([[-1.4, 0.5, 2.25], [1.4, 0.5, 2.25], [-1.4, -0.9, 1.05], [1.4, -0.9, 1.05]] as const).map(([px, pz, top]) => (
+                <Strut key={`${px}${pz}`} a={[px, g(cx + px, cz + pz * north) - gy - 0.15, pz * north]} b={[px, top, pz * north]} r={0.045} material={m.metal} />
+              ))}
               <group position={[0, 1.7, -0.2 * north]} rotation={[north * 0.7, 0, 0]}>
                 <mesh material={m.solar}><boxGeometry args={[3.9, 0.04, 2.4]} /></mesh>
                 <mesh material={m.metal} position={[0, -0.04, 0]}><boxGeometry args={[4, 0.05, 2.5]} /></mesh>
@@ -286,14 +303,14 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
         {/* ---- comms mast: guyed, a dish towards the sky, a red beacon */}
         <group position={[9, g(9, -13), -13]}>
           <mesh material={m.metal} position={[0, 7.5, 0]}><cylinderGeometry args={[0.07, 0.2, 15, 10]} /></mesh>
-          {[0, 1, 2].map((k) => <Strut key={k} a={[0, 11, 0]} b={[Math.cos((k * 2 * Math.PI) / 3) * 6, 0.1, Math.sin((k * 2 * Math.PI) / 3) * 6]} r={0.012} material={m.steel} />)}
+          {[0, 1, 2].map((k) => { const gx = Math.cos((k * 2 * Math.PI) / 3) * 6, gz = Math.sin((k * 2 * Math.PI) / 3) * 6; return <Strut key={k} a={[0, 11, 0]} b={[gx, g(9 + gx, -13 + gz) - g(9, -13) + 0.05, gz]} r={0.012} material={m.steel} />; })}
           {[4, 8, 12].map((h) => <mesh key={h} material={m.steel} position={[0, h, 0]}><boxGeometry args={[0.7, 0.05, 0.05]} /></mesh>)}
           <group position={[0.2, 12.6, 0.5]} rotation={[0.95, 0.3, 0]}>
             <mesh material={m.white} geometry={dish} />
             <Strut a={[0, 0.55, 0]} b={[0, 1.25, 0]} r={0.03} material={m.metal} />
             <mesh material={m.foil1} position={[0, 1.3, 0]}><cylinderGeometry args={[0.1, 0.14, 0.2, 12]} /></mesh>
           </group>
-          <mesh material={m.dark} position={[0, 0.5, 0.6]}><boxGeometry args={[0.8, 1, 0.6]} /></mesh>
+          <mesh material={m.dark} position={[0, 0.5 + Math.max(0, g(9, -12.4) - g(9, -13)) - 0.3, 0.6]}><boxGeometry args={[0.8, 1.6, 0.6]} /></mesh>
         </group>
 
         {/* ---- weather station: mast, wind cups, a small panel */}
@@ -306,7 +323,7 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
         </group>
 
         {/* ---- cargo: crates and a foil-wrapped container */}
-        <group position={[9, g(9, 9), 9]} rotation={[0, 0.4, 0]}>
+        <group position={[9, cargo.y - y, 9]} rotation={cargo.r}>
           <mesh material={m.white} geometry={useMemo(() => rbox(1.6, 1, 1.1, 0.08), [])} position={[0, 0.5, 0]} />
           <mesh material={m.foil1} geometry={useMemo(() => rbox(1.2, 0.8, 1, 0.08), [])} position={[0.1, 1.4, 0]} />
           <mesh material={m.orange} position={[0, 0.5, 0.56]}><boxGeometry args={[1.5, 0.12, 0.02]} /></mesh>
@@ -315,9 +332,9 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
         </group>
 
         {/* ---- landing pad, north of the outpost */}
-        <mesh position={[0, g(0, -36) + 0.06, -36]} rotation={[-Math.PI / 2, 0, 0]}><circleGeometry args={[10, 64]} /><meshStandardMaterial map={padTex} roughness={0.95} /></mesh>
+        <mesh position={[0, 0, -36]} geometry={padGeo}><meshStandardMaterial map={padTex} roughness={0.95} /></mesh>
 
-        <Rover m={m} at={[ROVER.x, g(ROVER.x, ROVER.z), ROVER.z]} yaw={ROVER.yaw} />
+        <Rover m={m} at={[ROVER.x, rover.y - y, ROVER.z]} rotation={rover.r} />
 
         {/* ---- a flag by the airlock */}
         <group position={[3.6, g(3.6, 8), 8]}>
@@ -335,11 +352,11 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
 });
 
 /** a six-wheeled pressurised rover: rocker suspension, a windshield, roof radiator, two suitports at the back */
-function Rover({ m, at, yaw }: { m: Mats; at: [number, number, number]; yaw: number }) {
+function Rover({ m, at, rotation }: { m: Mats; at: [number, number, number]; rotation: [number, number, number, "YXZ"] }) {
   const cabin = useMemo(() => rbox(3.5, 1.75, 2.35, 0.4), []), nose = useMemo(() => rbox(1.3, 1.25, 2.2, 0.35), []), chassis = useMemo(() => rbox(5.2, 0.34, 2, 0.1), []);
   useEffect(() => () => { cabin.dispose(); nose.dispose(); chassis.dispose(); }, [cabin, nose, chassis]);
   return (
-    <group position={at} rotation={[0, yaw, 0]}>
+    <group position={at} rotation={rotation}>
       {[-1.9, 0, 1.9].map((x) => [-1.4, 1.4].map((z) => (
         <group key={`${x}${z}`} position={[x, 0.62, z]} rotation={[Math.PI / 2, 0, 0]}>
           <mesh material={m.tyre}><cylinderGeometry args={[0.62, 0.62, 0.5, 32, 1, true]} /></mesh>
@@ -395,13 +412,14 @@ export const ScienceSite = memo(function ScienceSite({ hm, at }: { hm: Heightmap
   const g = (dx: number, dz: number) => groundY(hm, at.x + dx, at.z + dz) - y;
   const flags = useMemo(() => Array.from({ length: 7 }, (_, k) => ({ x: Math.cos(k * 1.1) * (3 + k * 0.8), z: Math.sin(k * 1.1) * (3 + k * 0.8) })), []);
   const box = useMemo(() => rbox(0.8, 0.45, 0.55, 0.05), []);
+  const cache = useMemo(() => seat(hm, at.x - 2.2, at.z + 1.6, 0.5, 0.42, 0.3, 0.03), [hm, at.x, at.z]);
   useEffect(() => () => box.dispose(), [box]);
   return (
     <group position={[at.x, y, at.z]}>
       <Merged deps={[hm, at.x, at.z]}>
         {/* instrument tripod: a spectrometer head with a lens and a small panel */}
         <group position={[2, g(2, -1), -1]}>
-          {[0, 1, 2].map((k) => <Strut key={k} a={[0, 1.45, 0]} b={[Math.cos((k * 2 * Math.PI) / 3) * 0.6, 0, Math.sin((k * 2 * Math.PI) / 3) * 0.6]} r={0.018} material={m.metal} />)}
+          {[0, 1, 2].map((k) => { const fx = Math.cos((k * 2 * Math.PI) / 3) * 0.6, fz = Math.sin((k * 2 * Math.PI) / 3) * 0.6; return <Strut key={k} a={[0, 1.45, 0]} b={[fx, g(2 + fx, -1 + fz) - g(2, -1) - 0.04, fz]} r={0.018} material={m.metal} />; })}
           <mesh material={m.white} position={[0, 1.55, 0]}><boxGeometry args={[0.42, 0.26, 0.32]} /></mesh>
           <mesh material={m.glass} position={[0, 1.55, 0.17]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[0.09, 0.09, 0.05, 20]} /></mesh>
           <mesh material={m.foil1} position={[0, 1.55, -0.17]}><boxGeometry args={[0.36, 0.2, 0.03]} /></mesh>
@@ -409,7 +427,7 @@ export const ScienceSite = memo(function ScienceSite({ hm, at }: { hm: Heightmap
         </group>
         {/* core drill on a frame */}
         <group position={[-1.5, g(-1.5, -2), -2]}>
-          {[-0.3, 0.3].map((x) => <Strut key={x} a={[x, 0, 0]} b={[x, 1.6, 0]} r={0.025} material={m.metal} />)}
+          {[-0.3, 0.3].map((x) => <Strut key={x} a={[x, g(-1.5 + x, -2) - g(-1.5, -2) - 0.05, 0]} b={[x, 1.6, 0]} r={0.025} material={m.metal} />)}
           <mesh material={m.steel} position={[0, 1.6, 0]}><boxGeometry args={[0.75, 0.06, 0.1]} /></mesh>
           <mesh material={m.orange} position={[0, 1.2, 0]}><boxGeometry args={[0.32, 0.4, 0.26]} /></mesh>
           <mesh material={m.steel} position={[0, 0.5, 0]}><cylinderGeometry args={[0.03, 0.03, 1, 10]} /></mesh>
@@ -423,7 +441,7 @@ export const ScienceSite = memo(function ScienceSite({ hm, at }: { hm: Heightmap
           </group>
         ))}
         {/* sample cache */}
-        <group position={[-2.2, g(-2.2, 1.6), 1.6]} rotation={[0, 0.5, 0]}>
+        <group position={[-2.2, cache.y - y, 1.6]} rotation={cache.r}>
           <mesh material={m.white} geometry={box} position={[0, 0.225, 0]} />
           <mesh material={m.orange} position={[0, 0.455, 0]}><boxGeometry args={[0.82, 0.03, 0.57]} /></mesh>
           {[-0.2, 0, 0.2].map((x) => <mesh key={x} material={m.metal} position={[x, 0.5, 0]}><cylinderGeometry args={[0.035, 0.035, 0.12, 10]} /></mesh>)}
@@ -527,7 +545,9 @@ export function Buttes({ hm, home, line, rt, onSolid }: { hm: Heightmap; home: P
             {/* fallen blocks at the foot */}
             {Array.from({ length: 6 }, (_, k) => {
               const a = hash(b.id, k + 200) * Math.PI * 2, d = b.r * (0.92 + hash(b.id, k + 300) * 0.4), s = 0.5 + hash(b.id, k + 400) * 1.5;
-              return <mesh key={`t${k}`} geometry={talus} material={talusMat} position={[Math.cos(a) * d, s * 0.3 - 0.4, Math.sin(a) * d * 0.82]} rotation={[k, a, k * 0.5]} scale={[s, s * 0.7, s * 1.1]} castShadow receiveShadow />;
+              const lx = Math.cos(a) * d, lz = Math.sin(a) * d * 0.82, cy = Math.cos(b.yaw), sy = Math.sin(b.yaw);
+              const gy = groundY(hm, b.x + lx * cy + lz * sy, b.z - lx * sy + lz * cy) - b.y;
+              return <mesh key={`t${k}`} geometry={talus} material={talusMat} position={[lx, gy + s * 0.25 - 0.3, lz]} rotation={[k, a, k * 0.5]} scale={[s, s * 0.7, s * 1.1]} castShadow receiveShadow />;
             })}
            </Merged>
           </group>

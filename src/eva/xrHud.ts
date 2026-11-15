@@ -77,7 +77,8 @@ export const HUD_PARTS: HudPart[] = [
   { id: "steer", w: 600, h: 72, yaw: 0, pitch: 10.5, roll: 0, sx: 0.5, sy: 0.66, ax: 0.5, ay: 0, draw: steerCue },
   { id: "suit", w: 200, h: 258, yaw: -31, pitch: -3, roll: 2.5, sx: 0.075, sy: 0.46, ax: 0, ay: 0.5, draw: suitBlock },
   { id: "nav", w: 214, h: 236, yaw: 31, pitch: -3, roll: -2.5, sx: 0.925, sy: 0.46, ax: 1, ay: 0.5, draw: navBlock },
-  { id: "map", w: 176, h: 176, yaw: -25, pitch: 21, roll: 5, sx: 0.12, sy: 0.93, ax: 0, ay: 1, draw: mapBlock },
+  // the map: nearer the centre than the lens edge (blurry on Quest) and bigger, ~11° across; clear of the steer cue and the suit block
+  { id: "map", w: 240, h: 240, yaw: -20, pitch: 16, roll: 3, sx: 0.12, sy: 0.93, ax: 0, ay: 1, draw: mapBlock },
   { id: "env", w: 330, h: 54, yaw: 25, pitch: 23, roll: -5, sx: 0.88, sy: 0.93, ax: 1, ay: 1, draw: envBlock },
 ];
 
@@ -347,13 +348,13 @@ function navBlock(ctx: CanvasRenderingContext2D, { v, rt }: HudData) {
 // the map is drawn off to the side first, then laid on the visor slightly see-through
 let mapCanvas: HTMLCanvasElement | null = null;
 function mapBlock(ctx: CanvasRenderingContext2D, { hm: hmap, v, rt, home }: HudData) {
-  const size = 168, px = 336;
+  const size = 232, px = 464;
   mapCanvas ??= document.createElement("canvas");
   if (mapCanvas.width !== px) { mapCanvas.width = px; mapCanvas.height = px; }
   const m = mapCanvas.getContext("2d")!;
   m.clearRect(0, 0, px, px);
   drawMap(m, hmap, v, rt, home, 0, 0, px, 1600, { round: true, headingUp: true });
-  ctx.globalAlpha = 0.78;
+  ctx.globalAlpha = 0.86;
   ctx.drawImage(mapCanvas, 4, 4, size, size);
   ctx.globalAlpha = 1;
 }

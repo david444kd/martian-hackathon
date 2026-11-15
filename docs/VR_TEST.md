@@ -84,3 +84,12 @@ Address parameters for these checks (combine with `&`): `?lite` cheapest setting
 | Several at once | `?simhud=many`: the list stays inside the upper-centre of the view, does not reach the centre, and the less important lines are readable | NOT TESTED ON DEVICE |
 | Recall | `?simhud=recall`, or a real recall: reason and "preparing the return route", then the distance to the airlock | NOT TESTED ON DEVICE |
 | Against bright ground | Read the alert lines over the white habitat and the sunlit ground | NOT TESTED ON DEVICE |
+## Consumables, guidance and alert tones — 2026-11-15
+
+| Check | Action | Result |
+| --- | --- | --- |
+| Guidance | Start an EVA from the ship (or `?simroute=900`, this browser only): chevrons and dashes lead round the outpost, the autopilot (X) does not stick on the solar farm, the target beacon and "target reached" appear | NOT TESTED ON DEVICE |
+| Consumables | Walk the route: O₂ / PWR / H₂O fall as you go, faster uphill; `MARGIN` shows the percentage expected at the airlock | NOT TESTED ON DEVICE |
+| Low reserve | A long route or a suit already low: CAUTION below 25 %, WARNING below 10 %, each with its quiet tone | NOT TESTED ON DEVICE |
+| Top-up | Return to the airlock on standby: the notice appears and the three values climb back to 100 % | NOT TESTED ON DEVICE |
+| Alert tones | Raise an advisory, a caution and a critical alert: the chimes are clearly quieter than the voice and not startling in the headset | NOT TESTED ON DEVICE |

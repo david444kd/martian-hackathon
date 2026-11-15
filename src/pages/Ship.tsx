@@ -4,7 +4,7 @@
 import { useMemo, useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
-import { Marker, Polyline, Tooltip, ZoomControl } from "react-leaflet";
+import { CircleMarker, Marker, Polyline, Tooltip, ZoomControl } from "react-leaflet";
 import { useTranslation } from "react-i18next";
 import { ZoneLeafletMap } from "../components/ZoneLeafletMap";
 import { DOT, pin } from "../components/mapPins";
@@ -27,6 +27,7 @@ import { alongs } from "../astro/checkpoints";
 import { Brand, CrewPicker, ErrorNote, EvaCard, RouteStats, StatusBadge } from "../components/common";
 import { AlertList, ConditionsGrid, EvaCheckView, HazardAreas, OutlookBar } from "../components/alerts";
 import { EventDialog } from "../components/EventDialog";
+import { RouteBudget, RouteProfile, SlopeLegend, slopeRuns } from "../components/RouteProfile";
 import { areaHazards, avoidList, crewAlerts, evaCheck, outlook, routeHit, type Avoid } from "../lib/hazards";
 import { conditions, eventLabel, useNow } from "../lib/mars";
 import { LanguageSwitcher } from "../components/LanguageSwitcher";
@@ -51,6 +52,7 @@ export function Ship() {
   const [selId, setSelId] = useState<string | null>(null);
   const [starts, setStarts] = useState<Record<string, Start>>({});
   const [drafts, setDrafts] = useState<Record<string, PathResult>>({});
+  const [probe, setProbe] = useState<[number, number] | null>(null); // the point of the route under the pointer on the elevation profile
   const active = activePlan(plans.data);
   const sel = plans.data?.find((p) => p.id === selId) ?? null;
   const home = crew ? crewHome(crew, zone) : null;
@@ -104,7 +106,7 @@ export function Ship() {
             )}
             {plans.data?.map((p, i) => (
               <PlanCard key={p.id} n={i + 1} plan={p} selected={p.id === selId} hm={hm.data} zone={zone} env={env} start={startOf(p)}
-                draft={drafts[p.id] ?? null}
+                draft={drafts[p.id] ?? null} onProbe={setProbe}
                 onSelect={() => setSelId(p.id === selId ? null : p.id)}
                 onDraft={(d) => setDrafts((all) => { const next = { ...all }; if (d) next[p.id] = d; else delete next[p.id]; return next; })} />
             ))}
@@ -117,7 +119,7 @@ export function Ship() {
       <main className="relative isolate min-w-0 flex-1 max-md:hidden">
         {zone && hm.data && crew ? (
           <ShipMap zone={zone} hm={hm.data} crew={crew} home={home} plans={plans.data ?? []} sel={sel} active={active} env={env} astro={astro}
-            start={sel ? startOf(sel) : null} draft={sel ? drafts[sel.id] ?? null : null}
+            start={sel ? startOf(sel) : null} draft={sel ? drafts[sel.id] ?? null : null} probe={probe}
             onPick={(lat, lon) => {
               if (!sel || !inZone(zone, lat, lon)) return;
               setStarts((s) => ({ ...s, [sel.id]: { lat, lon, name: t("ship.chosen_point") } }));
@@ -199,9 +201,9 @@ function ActiveEva({ plan, hm, env, astro, home }: { plan: WorkPlan; hm: Heightm
   );
 }
 
-function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, onDraft }: {
+function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, onDraft, onProbe }: {
   n: number; plan: WorkPlan; selected: boolean; hm: Heightmap | undefined; zone: Zone | undefined; env: Env; start: Start | null;
-  draft: PathResult | null; onSelect: () => void; onDraft: (d: PathResult | null) => void;
+  draft: PathResult | null; onSelect: () => void; onDraft: (d: PathResult | null) => void; onProbe: (at: [number, number] | null) => void;
 }) {
   const { t } = useTranslation();
   const update = useUpdatePlan(), startEva = useStartEva();
@@ -268,6 +270,8 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
             <div className="flex flex-col gap-2">
               <div className="text-xs font-medium text-live">{t("ship.new_route_unsent")}</div>
               <RouteStats route={draft} />
+              <RouteProfile route={draft} onHover={onProbe} />
+              <RouteBudget route={draft} />
             </div>
           )}
           {saved && !draft && (
@@ -276,6 +280,8 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
               {stale && <div className="rounded-lg bg-primary/10 px-2.5 py-1.5 text-xs text-primary">{recalled ? t("ship.eva_recalled_warning", { reason: saved.reason ?? t("ship.hazard_reason") }) : t("ship.target_moved_warning")}</div>}
               {crossed.length > 0 && <div className="rounded-lg bg-red-500/15 px-2.5 py-1.5 text-xs text-red-200">{t("ship.anomalies_crossed_warning", { crossed: crossed.map(eventLabel).join(", ") })}</div>}
               <RouteStats route={saved} />
+              <RouteProfile route={saved} onHover={onProbe} progress={plan.status === "in_progress" ? plan.progress_m : null} />
+              {!isReturn(saved) && <RouteBudget route={saved} />}
             </div>
           )}
 
@@ -294,9 +300,24 @@ function PlanCard({ n, plan, selected, hm, zone, env, start, draft, onSelect, on
 }
 
 // ------------------------------------------------------------------------------------------------
-function ShipMap({ zone, hm, crew, home, plans, sel, active, env, astro, start, draft, onPick, onSelect }: {
+/** a route line coloured by the slope along the way (blue down, pale level, red up), on a dark casing so it holds on the photo */
+function SlopeLine({ points, dashed, opacity = 1 }: { points: PathResult["points"]; dashed?: boolean; opacity?: number }) {
+  const runs = useMemo(() => slopeRuns(points, alongs({ points } as Route)), [points]);
+  const ll = (i: number) => [points[i][0], points[i][1]] as [number, number];
+  return (
+    <>
+      <Polyline positions={points.map((_, i) => ll(i))} pathOptions={{ color: "#17110d", weight: 8, opacity: 0.55 * opacity, lineCap: "round", interactive: false }} />
+      {runs.map((r, k) => (
+        <Polyline key={`${k}-${r.key}-${r.from}-${r.to}`} positions={Array.from({ length: r.to - r.from + 1 }, (_, i) => ll(r.from + i))}
+          pathOptions={{ color: r.color, weight: 4, opacity, lineCap: "butt", dashArray: dashed ? "9 6" : undefined, interactive: false }} />
+      ))}
+    </>
+  );
+}
+
+function ShipMap({ zone, hm, crew, home, plans, sel, active, env, astro, start, draft, probe, onPick, onSelect }: {
   zone: Zone; hm: Heightmap; crew: Crew; home: [number, number] | null; plans: WorkPlan[]; sel: WorkPlan | null; active: WorkPlan | undefined; env: Env; astro: AstronautView;
-  start: Start | null; draft: PathResult | null; onPick: (lat: number, lon: number) => void; onSelect: (id: string) => void;
+  start: Start | null; draft: PathResult | null; probe: [number, number] | null; onPick: (lat: number, lon: number) => void; onSelect: (id: string) => void;
 }) {
   const { t } = useTranslation();
 
@@ -321,11 +342,12 @@ function ShipMap({ zone, hm, crew, home, plans, sel, active, env, astro, start, 
         {active?.route && active.id !== sel?.id && (
           <Polyline positions={active.route.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={isReturn(active.route) ? { color: "#5fd8ff", weight: 5, opacity: 0.95, dashArray: "10 6" } : { color: "#4fd1ff", weight: 3, opacity: 0.6 }} />
         )}
-        {sel?.route && (
-          <Polyline positions={sel.route.points.map(([a, b]) => [a, b] as [number, number])}
-            pathOptions={isReturn(sel.route) ? { color: "#5fd8ff", weight: 5, opacity: draft ? 0.35 : 0.95, dashArray: "10 6" } : { color: "#ffb347", weight: 4, opacity: draft ? 0.35 : 1, dashArray: sel.route.target.lat !== sel.target_lat ? "6 8" : undefined }} />
-        )}
-        {draft && <Polyline positions={draft.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={{ color: "#4fd1ff", weight: 4, dashArray: "8 6" }} />}
+        {/* the plan being worked on: its route coloured by slope (a return route keeps its own blue); a new, unsent one dashed */}
+        {sel?.route && (isReturn(sel.route)
+          ? <Polyline positions={sel.route.points.map(([a, b]) => [a, b] as [number, number])} pathOptions={{ color: "#5fd8ff", weight: 5, opacity: draft ? 0.35 : 0.95, dashArray: "10 6" }} />
+          : <SlopeLine points={sel.route.points} opacity={draft ? 0.3 : 1} dashed={sel.route.target.lat !== sel.target_lat} />)}
+        {draft && <SlopeLine points={draft.points} dashed />}
+        {probe && sel && <CircleMarker center={probe} radius={6} pathOptions={{ color: "#17110d", weight: 2, fillColor: "#ffffff", fillOpacity: 1, interactive: false }} />}
         {sel && start && (
           <Marker position={[start.lat, start.lon]} icon={pin(`${DOT} bg-white`, "", 14)}>
             <Tooltip direction="top" offset={[0, -8]}>{t("ship.start_tooltip", { name: start.name })}</Tooltip>
@@ -343,7 +365,8 @@ function ShipMap({ zone, hm, crew, home, plans, sel, active, env, astro, start, 
         <Legend cls="bg-landing" label={t("ship.landing_site_legend")} />
         <Legend cls="bg-route" label={t("ship.plan_target_legend")} />
         <Legend cls="bg-live" label={t("ship.astronaut_live_legend")} />
-        <div className="flex items-center gap-2"><span className="h-0.5 w-4 bg-route" />{t("ship.route_in_helmet_legend")}</div>
+        <div className="flex items-center gap-2"><span className="h-0.5 w-4 bg-live/70" />{t("ship.route_in_helmet_legend")}</div>
+        <div className="flex flex-col gap-0.5"><span>{t("eva.slope_legend")}</span><SlopeLegend className="text-foreground/80" /></div>
         <div className="flex items-center gap-2"><span className="h-0.5 w-4 border-t-2 border-dashed border-sky-400" />{t("ship.return_to_base_legend")}</div>
         <div className="flex items-center gap-2"><span className="h-0.5 w-4 border-t-2 border-dotted border-live" />{t("ship.walked_live_legend")}</div>
         <div className="flex items-center gap-2"><span className="h-0.5 w-4 border-t-2 border-dashed border-live" />{t("ship.new_route_unsent_legend")}</div>

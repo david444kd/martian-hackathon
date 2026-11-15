@@ -129,9 +129,12 @@ export function Player({ hm, rt }: { hm: Heightmap; rt: EvaRuntime }) {
       const rise = groundY(hm, next.x, next.z) - groundY(hm, cur.x, cur.z);
       if (run > 0.01 && Math.abs(rise / run) > Math.tan((MAX_STEP_DEG * Math.PI) / 180) && slopeDeg(hm, next.x, next.z) > MAX_STEP_DEG)
         return { p: cur, blocked: i18n.t("evahud.blocked_steep") };
+      // solid things: no stepping into one, but the step slides along its side instead of sticking
       for (const c of rt.solid) {
         const d0 = Math.hypot(cur.x - c.x, cur.z - c.z), d1 = Math.hypot(next.x - c.x, next.z - c.z);
-        if (d1 < c.r && d1 < d0) return { p: cur, blocked: "" };
+        if (d1 >= c.r || d1 >= d0) continue;
+        if (d1 < 0.01 || d0 < c.r - 0.3) return { p: cur, blocked: "" };
+        next.x = c.x + ((next.x - c.x) / d1) * c.r; next.z = c.z + ((next.z - c.z) / d1) * c.r;
       }
       for (const c of rt.closed) {
         const d0 = Math.hypot(cur.x - c.x, cur.z - c.z), d1 = Math.hypot(next.x - c.x, next.z - c.z);

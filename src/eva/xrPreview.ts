@@ -83,3 +83,13 @@ export function withSimulatedAlerts<T extends EvaView>(v: T, hm: Heightmap, home
     notice: SIM_HUD === "many" ? { text: i18n.t("voice.new_route") as string, level: "info", from: "ship", at: 0 } : v.notice,
   };
 }
+
+// Looking at the route guidance without a plan from the ship:
+//   ?simroute=<m>[&simbrg=<deg>]  a walking route from the base to a point that far away (default
+//   bearing 60°), made by the same planner. Kept in this browser only: no plan, nothing stored;
+//   the helmet's usual position reports still go out as they do on standby.
+export const SIM_ROUTE = Number(q.get("simroute")) || 0;
+export function simulatedTarget(hm: Heightmap, home: [number, number]): [number, number] {
+  const h = toLocal(hm, home[0], home[1]), b = ((Number(q.get("simbrg")) || 60) * Math.PI) / 180;
+  return toLatLon(hm, h.x + Math.sin(b) * SIM_ROUTE, h.z - Math.cos(b) * SIM_ROUTE);
+}

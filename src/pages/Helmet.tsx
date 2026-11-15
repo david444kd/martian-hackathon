@@ -22,7 +22,9 @@ import { useEva, type EvaView } from "../eva/useEva";
 import { EvaHud } from "../eva/EvaHud";
 import { toLocal } from "../eva/frame";
 import { LanguageSwitcher } from "../components/LanguageSwitcher";
-import { simulatedDust, simulatedStormAt, SIMULATED_DUST, SIMULATED_HUD, withSimulatedAlerts, XR_PREVIEW } from "../eva/xrPreview";
+import { SIM_ROUTE, simulatedDust, simulatedStormAt, simulatedTarget, SIMULATED_DUST, SIMULATED_HUD, withSimulatedAlerts, XR_PREVIEW } from "../eva/xrPreview";
+import { generateRoute } from "../lib/routing";
+import type { Route } from "../lib/types";
 import { QUEST } from "../eva/quality";
 
 const EvaScene = lazy(() => import("../eva/EvaScene").then((m) => ({ default: m.EvaScene })));
@@ -59,7 +61,18 @@ export function Helmet() {
   const [muted, setMuted] = useState(false);
   const [begun, setBegun] = useState(false);
 
-  const live = useEva({ crew, zone, hm: hm.data, home, plan, evs, now, rt, audio, suit });
+  // ?simroute=<m>: a route to look at the guidance with, when the ship has sent none (eva/xrPreview.ts)
+  const [previewRoute, setPreviewRoute] = useState<Route | null>(null);
+  useEffect(() => {
+    if (!SIM_ROUTE || !hm.data || !home) return;
+    let off = false;
+    const target = simulatedTarget(hm.data, home);
+    generateRoute(hm.data, home, target).then((r) => {
+      if (!off) setPreviewRoute({ ...r, start: { lat: home[0], lon: home[1], name: "preview" }, target: { lat: target[0], lon: target[1] }, generated_at: new Date().toISOString(), mode: "out" });
+    }).catch(() => {});
+    return () => { off = true; };
+  }, [hm.data, home]);
+  const live = useEva({ crew, zone, hm: hm.data, home, plan, evs, now, rt, audio, suit, previewRoute });
   // ?simhud=…: sample alerts on this display only (eva/xrPreview.ts)
   const v = SIMULATED_HUD && live && hm.data && home ? withSimulatedAlerts(live, hm.data, home) : live;
   const viewRef = useRef<EvaView | null>(null);

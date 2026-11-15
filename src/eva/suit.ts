@@ -43,7 +43,8 @@ export class SuitModel {
   }
   /** a new EVA: fresh consumables */
   reset() {
-    this.s = { ...this.s, o2Pct: 100, batteryPct: 100, waterPct: 100, doseUSv: 0 };
+    this.s = { ...this.s, o2Pct: 100, batteryPct: 100, waterPct: 100, doseUSv: 0, reservePct: 100 };
+    this.times();
     save(KEY(this.crew), { o2Pct: 100, batteryPct: 100, waterPct: 100, doseUSv: 0 });
   }
   private times() {

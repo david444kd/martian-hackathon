@@ -20,7 +20,7 @@ import { Merged } from "./merge";
 import { Q } from "./quality";
 import { foil, hull, label, patch, solar, strata, tyre } from "./textures";
 
-export const HAB_OFFSET = -12.5; // m north of the landing point: you start a few steps from the foot of the airlock ladder
+import { HAB_OFFSET, outpostSolids, ROVER } from "./layout";
 
 function makeMats() {
   const h = hull([4, 1]), h2 = hull([2, 1]), f = foil([6, 2]), f1 = foil([2, 2]), sp = solar([1, 1]), ty = tyre();
@@ -120,18 +120,7 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
   const y = footY(hm, H.x, H.z, 8);
   /** ground height at an offset from the habitat, relative to its floor */
   const g = (dx: number, dz: number) => groundY(hm, H.x + dx, H.z + dz) - y;
-  useEffect(() => {
-    onSolid([
-      { x: H.x, z: H.z, r: 5 },                                              // habitat
-      { x: H.x - 15, z: H.z, r: 3.4 }, { x: H.x - 19.5, z: H.z, r: 3.4 },      // lab module
-      { x: H.x - 9, z: H.z, r: 1.6 },                                         // tunnel
-      { x: H.x - 8, z: H.z + 12, r: 3.6 },                                    // rover
-      { x: H.x + 24, z: H.z, r: 9.5 },                                        // solar farm
-      { x: H.x + 9, z: H.z - 13, r: 1.6 },                                    // mast
-      { x: H.x - 17, z: H.z - 6, r: 2.6 },                                    // tanks
-      { x: H.x + 9, z: H.z + 9, r: 2.2 },                                     // cargo
-    ]);
-  }, [H.x, H.z]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onSolid(outpostSolids(home)); }, [H.x, H.z]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // every light of the outpost: airlock status and floods, the mast beacon, the pad's edge, the path, the rover's headlights
   const lights = useMemo<Light[]>(() => {
@@ -344,8 +333,6 @@ export const Outpost = memo(function Outpost({ hm, home, onSolid }: { hm: Height
     </group>
   );
 });
-
-const ROVER = { x: -8, z: 12, yaw: 0.55 };
 
 /** a six-wheeled pressurised rover: rocker suspension, a windshield, roof radiator, two suitports at the back */
 function Rover({ m, at, yaw }: { m: Mats; at: [number, number, number]; yaw: number }) {

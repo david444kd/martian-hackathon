@@ -73,7 +73,7 @@ export const HUD_PARTS: HudPart[] = [
   // the alerts: the first line sits ~16.5° above the line of sight, the rest grows down to ~9° and no wider than ±17°
   { id: "message", w: 640, h: 162, yaw: 0, pitch: -13.4, roll: 0, sx: 0.5, sy: 0.145, ax: 0.5, ay: 0, draw: alertsBlock },
   { id: "suit", w: 200, h: 236, yaw: -31, pitch: -3, roll: 2.5, sx: 0.075, sy: 0.46, ax: 0, ay: 0.5, draw: suitBlock },
-  { id: "nav", w: 214, h: 214, yaw: 31, pitch: -3, roll: -2.5, sx: 0.925, sy: 0.46, ax: 1, ay: 0.5, draw: navBlock },
+  { id: "nav", w: 214, h: 236, yaw: 31, pitch: -3, roll: -2.5, sx: 0.925, sy: 0.46, ax: 1, ay: 0.5, draw: navBlock },
   { id: "map", w: 176, h: 176, yaw: -25, pitch: 21, roll: 5, sx: 0.12, sy: 0.93, ax: 0, ay: 1, draw: mapBlock },
   { id: "env", w: 330, h: 54, yaw: 25, pitch: 23, roll: -5, sx: 0.88, sy: 0.93, ax: 1, ay: 1, draw: envBlock },
 ];
@@ -287,16 +287,20 @@ function navBlock(ctx: CanvasRenderingContext2D, { v, rt }: HudData) {
     txt(ctx, fmtKm(v.left), x, y, 19, HUD, "right", 600);
     y += 24;
     txt(ctx, `${v.guide ? `${deg3(v.guide.bearing)}°` : "---"}  ${Math.max(0, Math.round(v.etaMin))} ${h("min")}`, x, y, 17, DIM, "right");
+    // the relief still ahead: metres to climb and to descend, and the slope of the next stretch
+    y += 22;
+    const sl = Math.round(v.slopeAhead);
+    txt(ctx, `▲${Math.round(v.climbLeft)} ▼${Math.round(v.descentLeft)} m  ${sl > 0 ? "↗" : sl < 0 ? "↘" : "→"}${Math.abs(sl)}°`, x, y, 15, sl >= 8 ? CAUTION : DIM, "right");
     if (v.offRoute > 15) { y += 22; txt(ctx, `${h("xtk")} ${Math.round(v.offRoute)} m`, x, y, 15, v.offRoute > 40 ? CAUTION : DIM, "right"); }
   }
   y += 32;
   txt(ctx, h("base"), x - w, y, 17, DIM);
   txt(ctx, `${fmtKm(v.toBase)} ${deg3(v.bearingBase)}°`, x, y, 17, HUD, "right");
-  const walkMin = back ? v.etaMin : (v.toBase * 1.3) / 60; // ~1 m/s; a straight line plus detours
-  const s = v.suit, margin = Math.min(s.remainingMin, s.batteryMin, s.waterMin) - walkMin;
+  // what the suit is expected to have left at the airlock (the least of oxygen, power and water)
+  const reserve = v.suit.reservePct;
   y += 26;
   txt(ctx, h("margin"), x - w, y, 15, DIM);
-  txt(ctx, hm(margin), x, y, 19, margin < 15 ? WARNING : margin < 45 ? CAUTION : HUD, "right", 600);
+  txt(ctx, `${Math.round(reserve)}%`, x, y, 19, reserve < 10 ? WARNING : reserve < 25 ? CAUTION : HUD, "right", 600);
 }
 
 // the map is drawn off to the side first, then laid on the visor slightly see-through

@@ -8,6 +8,7 @@
 // when a squall hits, the crackle of static discharges in the dust (Perseverance's microphone recorded
 // such discharges in dust devils and storm fronts), interference on the radio, harder breathing and
 // your own pulse. Loudness and character are dramatised for the demonstration, not measured.
+// Alerts are soft chimes at about a third of the level they had as square-wave beeps.
 
 import i18n from "../i18n";
 import { wind } from "./wind";
@@ -237,17 +238,6 @@ export class SuitAudio {
     src.start(at, Math.random() * Math.max(0, buffer.duration - dur - 0.1), dur + 0.05);
   }
 
-  private beep(at: number, freq: number, dur: number, gain: number, type: OscillatorType = "sine") {
-    const ctx = this.ctx!, o = ctx.createOscillator(), g = ctx.createGain();
-    o.type = type; o.frequency.value = freq;
-    g.gain.setValueAtTime(0.0001, at);
-    g.gain.exponentialRampToValueAtTime(gain, at + 0.015);
-    g.gain.setValueAtTime(gain, at + dur - 0.03);
-    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-    o.connect(g).connect(this.master);
-    o.start(at); o.stop(at + dur + 0.02);
-  }
-
   /** a boot on regolith, heard through the suit: a dull thump and a little crunch */
   private step(weight: number) {
     const t = this.ctx!.currentTime;
@@ -255,28 +245,47 @@ export class SuitAudio {
     this.burst(t + 0.02, 0.09, "bandpass", 1400, 0.05 * (0.5 + weight));
   }
 
-  /** radio: squelch and the two-tone call signal, before mission control speaks */
+  /** a soft tone: a sine with a little of its octave, a quick fade in and a long fade out, low-passed — a chime, not a buzzer */
+  private chime(at: number, freq: number, dur: number, gain: number) {
+    const ctx = this.ctx!, g = ctx.createGain(), lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 2400;
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(gain, at + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    for (const [mult, level] of [[1, 1], [2, 0.16]] as const) {
+      const o = ctx.createOscillator(), og = ctx.createGain();
+      o.type = "sine"; o.frequency.value = freq * mult; og.gain.value = level;
+      o.connect(og).connect(g);
+      o.start(at); o.stop(at + dur + 0.05);
+    }
+    g.connect(lp).connect(this.master);
+  }
+
+  /** radio: a soft squelch and the two-tone call signal, before mission control speaks */
   radio() {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== "running") return;
     const t = ctx.currentTime;
-    this.burst(t, 0.08, "highpass", 2500, 0.12);
+    this.burst(t, 0.07, "highpass", 2200, 0.045);
     if (wind.storm > 0.5) this.crackle(t + 0.05);   // the dust is on the link too
-    this.beep(t + 0.1, 2525, 0.22, 0.08);
-    this.beep(t + 0.36, 2475, 0.22, 0.08);
+    this.chime(t + 0.1, 1480, 0.2, 0.035);
+    this.chime(t + 0.34, 1245, 0.24, 0.035);
   }
 
-  /** caution / master alarm */
+  /**
+   * The alert tones, kept quiet: they point at the display and the voice, they do not shout over them.
+   * WARNING (critical): three falling two-note chimes; CAUTION: two notes; advisory: one rising pair.
+   */
   alarm(level: Tone) {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== "running") return;
     const t = ctx.currentTime;
     if (level === "critical") {
-      for (let k = 0; k < 6; k++) this.beep(t + k * 0.32, k % 2 ? 1046 : 784, 0.28, 0.16, "square");
+      for (let k = 0; k < 3; k++) { this.chime(t + k * 0.62, 784, 0.34, 0.07); this.chime(t + k * 0.62 + 0.2, 587, 0.42, 0.07); }
     } else if (level === "warning") {
-      for (let k = 0; k < 3; k++) this.beep(t + k * 0.38, 880, 0.24, 0.12, "triangle");
+      this.chime(t, 659, 0.36, 0.05); this.chime(t + 0.3, 659, 0.46, 0.05);
     } else {
-      this.beep(t, 660, 0.14, 0.08); this.beep(t + 0.18, 990, 0.18, 0.08);
+      this.chime(t, 523, 0.26, 0.03); this.chime(t + 0.16, 659, 0.38, 0.03);
     }
   }
 
@@ -305,11 +314,11 @@ export class SuitAudio {
       sh.curve = curve; g.gain.value = 1.1;
       src.connect(hp).connect(lp).connect(sh).connect(g).connect(this.master);
       const t = ctx.currentTime;
-      this.burst(t, 0.06, "highpass", 2500, 0.08);
+      this.burst(t, 0.06, "highpass", 2200, 0.04);
       // in a storm the voice comes through static
       if (wind.storm > 0.4) this.burst(t + 0.05, buf.duration, "bandpass", 2100, 0.05 * wind.storm, this.white);
       src.start(t + 0.05);
-      src.onended = () => this.burst(ctx.currentTime, 0.09, "highpass", 2200, 0.1); // squelch tail
+      src.onended = () => this.burst(ctx.currentTime, 0.08, "highpass", 2200, 0.045); // squelch tail
     });
   }
 

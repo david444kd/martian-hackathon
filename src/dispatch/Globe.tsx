@@ -1,14 +1,22 @@
 // Mission control's Mars globe: drag to turn, scroll to zoom; every crew on the surface is a dot,
-// every anomaly a pulsing patch; a solar particle event turns the whole atmosphere violet.
-import { useEffect, useMemo, useRef } from "react";
+// every anomaly a GPU-drawn picture (dispatch/Anomaly.tsx); a solar particle event turns the atmosphere
+// violet, lights a night-side aurora and a solar-wind stream (dispatch/SolarStorm.tsx).
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, OrbitControls, Stars, useTexture } from "@react-three/drei";
 import * as THREE from "three";
-import type { Level } from "../lib/types";
+import type { EventKind, Level } from "../lib/types";
+import { seedOf } from "../lib/stormArt";
 import { LEVEL_COLOR } from "../components/levels";
+import { Anomaly } from "./Anomaly";
+import { anomalySize, stormTime } from "../lib/globeFx";
+import { SolarStorm } from "./SolarStorm";
+import { SciencePoints } from "./SciencePoints";
+import { buildGlobeTexture, choiceKey, DEFAULT_TEXTURE } from "./globeLayers";
+import type { LayerChoice } from "../lib/marsLayers";
 
 interface GlobeCrew { id: string; name: string; lat: number; lon: number; active: boolean; alert: Level | null }
-interface GlobeHazard { id: string; lat: number; lon: number; level: Level; label: string; active: boolean }
+interface GlobeHazard { id: string; kind: EventKind; lat: number; lon: number; level: Level; label: string; active: boolean }
 
 interface Props {
   crews: GlobeCrew[];
@@ -16,6 +24,10 @@ interface Props {
   solar: Level | null;
   selected: string | null;
   onSelect: (id: string) => void;
+  /** the base map and science layers picked in the layer switcher */
+  layers: LayerChoice;
+  /** a layer is loading / failed (for the switcher's button) */
+  onLayerStatus?: (s: { busy: boolean; error: boolean }) => void;
 }
 
 /** a point on the unit sphere for an equirectangular texture with longitude -180 at its left edge */
@@ -25,30 +37,55 @@ function onSphere(lat: number, lon: number, r = 1) {
 }
 
 export function Globe(props: Props) {
+  const { layers, onLayerStatus } = props;
+  const [tex, setTex] = useState({ busy: false, error: false }), [pts, setPts] = useState({ busy: false, error: false });
+  useEffect(() => { onLayerStatus?.({ busy: tex.busy || pts.busy, error: tex.error || pts.error }); }, [tex, pts, onLayerStatus]);
+  const onPoints = useCallback((s: { busy: boolean; error: boolean }) => setPts(s), []);
   return (
     <Canvas camera={{ fov: 35, near: 0.01, far: 100, position: onSphere(12, 95, 4.2).toArray() }} dpr={[1, 2]}>
       <color attach="background" args={["#07060a"]} />
       <Stars radius={30} depth={20} count={2500} factor={2.2} fade saturation={0} />
       <ambientLight intensity={1.15} />
       <directionalLight position={[-4, 2, 5]} intensity={1.6} />
-      <Planet />
+      <Planet layers={layers} onStatus={setTex} />
+      <SciencePoints minerals={layers.overlays.includes("minerals")} ice={layers.overlays.includes("ice")} onStatus={onPoints} />
       <Atmosphere color={props.solar ? "#b76bff" : "#e8925a"} strength={props.solar === "critical" ? 1.1 : props.solar ? 0.8 : 0.55} />
       {props.hazards.map((h, i) => <HazardMark key={h.id} h={h} label={labelOf(props.hazards, i)} />)}
+      <StormClock />
+      {props.solar && <SolarStorm level={props.solar} />}
       <Markers {...props} />
       <CameraRig {...props} />
     </Canvas>
   );
 }
 
-function Planet() {
-  const map = useTexture("/textures/mars-4k.jpg", (t) => {
+/** the planet: the built-in Viking texture, or one stitched from Mars Trek tiles for the chosen layers
+ *  (dispatch/globeLayers.ts); the old picture stays until the new one is ready */
+function Planet({ layers, onStatus }: { layers: LayerChoice; onStatus: (s: { busy: boolean; error: boolean }) => void }) {
+  const builtin = useTexture(DEFAULT_TEXTURE, (t) => {
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = 8;
   });
+  const [custom, setCustom] = useState<THREE.Texture | null>(null);
+  const key = choiceKey(layers);
+  useEffect(() => {
+    let live = true;
+    onStatus({ busy: true, error: false });
+    buildGlobeTexture(layers).then(
+      (r) => {
+        if (!live) { r?.texture.dispose(); return; }
+        setCustom(r?.texture ?? null);
+        onStatus({ busy: false, error: !!r?.failed });
+      },
+      () => { if (live) onStatus({ busy: false, error: true }); },
+    );
+    return () => { live = false; };
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => custom?.dispose(), [custom]);
   return (
     <mesh>
       <sphereGeometry args={[1, 128, 64]} />
-      <meshStandardMaterial map={map} roughness={1} metalness={0} />
+      <meshStandardMaterial map={custom ?? builtin} roughness={1} metalness={0} />
     </mesh>
   );
 }
@@ -84,42 +121,49 @@ function labelOf(all: GlobeHazard[], i: number) {
   return n > 1 ? `${all[i].label} +${n - 1}` : all[i].label;
 }
 
-/** an anomaly: a translucent patch with a pulse (faint while only forecast) and its name */
+/** an anomaly: its GPU picture (dispatch/Anomaly.tsx), a pulse ring (faint while only forecast) and its name */
 function HazardMark({ h, label: text }: { h: GlobeHazard; label: string | null }) {
   const pos = useMemo(() => onSphere(h.lat, h.lon, 1.003), [h.lat, h.lon]);
   const quat = useMemo(() => new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), pos.clone().normalize()), [pos]);
   const ring = useRef<THREE.Mesh>(null), label = useRef<HTMLDivElement>(null);
   const tmp = useMemo(() => new THREE.Vector3(), []);
   const color = LEVEL_COLOR[h.level];
+  const seed = useMemo(() => seedOf(h.id), [h.id]);
+  const size = anomalySize(h.kind);
   useFrame(({ clock, camera }) => {
     if (ring.current) {
       const t = (clock.elapsedTime * 0.6) % 1;
-      ring.current.scale.setScalar(1 + t * 1.6);
-      (ring.current.material as THREE.MeshBasicMaterial).opacity = (1 - t) * (h.active ? 0.9 : 0.35);
+      ring.current.scale.setScalar(1 + t * 0.6);
+      (ring.current.material as THREE.MeshBasicMaterial).opacity = (1 - t) * (h.active ? 0.8 : 0.3);
     }
     if (label.current) { tmp.copy(camera.position).sub(pos); label.current.style.opacity = tmp.dot(pos) > 0 ? "1" : "0"; }
   });
   return (
-    <group position={pos} quaternion={quat}>
-      <mesh>
-        <circleGeometry args={[0.032, 40]} />
-        <meshBasicMaterial color={color} transparent opacity={h.active ? 0.35 : 0.12} depthWrite={false} />
-      </mesh>
-      <mesh ref={ring} position={[0, 0, 0.0005]}>
-        <ringGeometry args={[0.03, 0.034, 48]} />
-        <meshBasicMaterial color={color} transparent depthWrite={false} />
-      </mesh>
-      {text && (
-        <Html position={[0, 0, 0.01]} center zIndexRange={[9, 0]} style={{ pointerEvents: "none" }}>
-          <div ref={label} className="translate-y-[22px] transition-opacity duration-200">
-            <div className="rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap" style={{ color, border: `1px solid ${color}88` }}>
-              {h.active ? "⚠" : "◷"} {text}
+    <>
+      <Anomaly quat={quat} seed={seed} kind={h.kind} level={h.level} active={h.active} />
+      <group position={pos} quaternion={quat}>
+        <mesh ref={ring} position={[0, 0, 0.009]} renderOrder={5}>
+          <ringGeometry args={[size * 0.97, size * 1.01, 64]} />
+          <meshBasicMaterial color={color} transparent depthWrite={false} />
+        </mesh>
+        {text && (
+          <Html position={[0, 0, 0.01]} center zIndexRange={[9, 0]} style={{ pointerEvents: "none" }}>
+            <div ref={label} className="translate-y-[22px] transition-opacity duration-200">
+              <div className="rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap" style={{ color, border: `1px solid ${color}88` }}>
+                {h.active ? "⚠" : "◷"} {text}
+              </div>
             </div>
-          </div>
-        </Html>
-      )}
-    </group>
+          </Html>
+        )}
+      </group>
+    </>
   );
+}
+
+/** advances the storms' shared shader clock once per frame */
+function StormClock() {
+  useFrame(({ clock }) => { stormTime.value = clock.elapsedTime; });
+  return null;
 }
 
 function Markers({ crews, selected, onSelect }: Props) {
@@ -195,7 +239,7 @@ function CameraRig({ crews, selected }: Props) {
 
   return (
     <OrbitControls enablePan={false} minDistance={1.4} maxDistance={8} rotateSpeed={0.5} zoomSpeed={0.7}
-      autoRotate={!selected} autoRotateSpeed={0.35} enableDamping
+      autoRotate={!selected} autoRotateSpeed={0.08} enableDamping
       onStart={() => { flight.current = null; }} />
   );
 }

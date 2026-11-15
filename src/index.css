@@ -141,6 +141,29 @@
 html, body, #root { height: 100%; }
 body { overflow: hidden; }
 
+/* Native scrollbars (layers panel, events list, dialogs) like the ScrollArea component: a thin,
+   rounded warm-grey thumb on a transparent track, brighter on hover, amber while dragged. */
+:root {
+  --scroll-thumb: oklch(1 0.02 60 / 16%);
+  --scroll-thumb-hover: oklch(1 0.02 60 / 30%);
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  min-height: 32px;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+::-webkit-scrollbar-thumb:active { background-color: color-mix(in oklch, var(--primary) 70%, transparent); }
+::-webkit-scrollbar-button { display: none; height: 0; width: 0; }
+/* Firefox has only the standard properties (Chromium would let them override the rules above) */
+@supports (-moz-appearance: none) {
+  * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb-hover) transparent; }
+}
+
 /* Leaflet on the ship console */
 .leaflet-container { background: #0d0907; font: inherit; }
 .leaflet-control-attribution { background: oklch(0.16 0.012 45 / 70%) !important; color: oklch(0.7 0.02 60) !important; font-size: 10px; }

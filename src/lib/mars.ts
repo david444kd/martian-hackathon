@@ -4,6 +4,7 @@
 // climate measured by Curiosity (REMS, RAD) and Perseverance (MEDA); active events (the `events` table)
 // push it around: a dust storm thickens the air, a solar particle event multiplies the radiation.
 import { useEffect, useState } from "react";
+import i18n from "../i18n";
 import { EVENT_KINDS, type MarsEvent } from "./types";
 import type { Zone } from "./zones";
 
@@ -32,7 +33,8 @@ export const fmtLmst = (h: number) => `${String(Math.floor(h)).padStart(2, "0")}
 export function season(ls: number, lat: number) {
   const north = ["spring", "summer", "autumn", "winter"][Math.floor(ls / 90) % 4];
   const flip: Record<string, string> = { spring: "autumn", summer: "winter", autumn: "spring", winter: "summer" };
-  return lat >= 0 ? north : flip[north];
+  const s = lat >= 0 ? north : flip[north];
+  return i18n.t(`seasons.${s}`, { defaultValue: s });
 }
 
 export interface Conditions {
@@ -113,4 +115,4 @@ export function useNow(ms = 15_000) {
   return now;
 }
 
-export const eventLabel = (e: MarsEvent) => e.title || EVENT_KINDS[e.kind].label;
+export const eventLabel = (e: MarsEvent) => e.title || i18n.t(`event_kinds.${e.kind}.label`, { defaultValue: EVENT_KINDS[e.kind]?.label || e.kind });

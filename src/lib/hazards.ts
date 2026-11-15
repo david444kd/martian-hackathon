@@ -1,6 +1,7 @@
 // What the events mean for a crew: its alerts, whether an anomaly lies across its route, whether an
 // EVA is safe to start now and when the next safe window opens. All derived on each client from the
 // same `events` rows and the same clock, so nothing extra is written and the three apps agree.
+import i18n from "../i18n";
 import { alongs } from "../astro/checkpoints";
 import { distanceM, fmtDur, fmtKm } from "./geo";
 import { conditions, doseOver, eventLabel, fmtLmst, isActive, touchesZone } from "./mars";
@@ -49,6 +50,8 @@ export interface Alert {
   event: MarsEvent;
   /** a message to this crew: the ship confirms it */
   ackable: boolean;
+  /** what kind of alert this is, independent of the (translated) title */
+  scope: "message" | "forecast" | "route" | "zone";
 }
 
 /** everything a crew should know about now: messages, anomalies around it, what is coming */
@@ -59,8 +62,8 @@ export function crewAlerts(crew: Crew, zone: Zone | undefined, plan: WorkPlan | 
   for (const e of events) {
     if (e.kind === "message") {
       if ((e.crew_id && e.crew_id !== crew.id) || e.acked_at || !isActive(e, now)) continue;
-      const from = e.source === "ship" ? "Ship" : "Mission control";
-      out.push({ id: e.id, level: e.level, title: `${from}${e.title ? `: ${e.title}` : ""}`, text: e.text, event: e, ackable: !!e.crew_id });
+      const from = e.source === "ship" ? i18n.t("hazards.from_ship") : i18n.t("hazards.from_dispatch");
+      out.push({ id: e.id, level: e.level, title: `${from}${e.title ? `: ${e.title}` : ""}`, text: e.text, event: e, ackable: !!e.crew_id, scope: "message" });
       continue;
     }
     if (!touchesZone(e, crew.zone)) continue;
@@ -69,19 +72,21 @@ export function crewAlerts(crew: Crew, zone: Zone | undefined, plan: WorkPlan | 
       const t0 = Date.parse(e.starts_at);
       if (t0 > now && t0 - now < FORECAST_MS) {
         const soon = t0 - now < 2 * 3600_000 && e.level === "critical";
-        out.push({ id: e.id, level: soon ? "warning" : "info", title: `Forecast: ${label} in ${startsIn(e, now)}`, text: e.text, event: e, ackable: false });
+        out.push({ id: e.id, level: soon ? "warning" : "info", title: i18n.t("hazards.forecast_in", { label, time: startsIn(e, now) }), text: e.text, event: e, ackable: false, scope: "forecast" });
       }
       continue;
     }
-    if (!hasArea(e)) { out.push({ id: e.id, level: e.level, title: label, text: e.text, event: e, ackable: false }); continue; }
+    if (!hasArea(e)) { out.push({ id: e.id, level: e.level, title: label, text: e.text, event: e, ackable: false, scope: "zone" }); continue; }
     const hit = route ? routeHit(route, along, e, plan?.progress_m ?? 0) : null;
     if (hit != null) {
       const ahead = Math.max(0, hit - (plan?.progress_m ?? 0));
-      out.push({ id: e.id, level: e.level === "info" ? "warning" : "critical", title: `${label} on the route`, text: `${ahead < 30 ? "You are in it" : `${fmtKm(ahead)} ahead`}. ${e.text}`, event: e, ackable: false });
+      const loc = ahead < 30 ? i18n.t("hazards.in_it") : i18n.t("hazards.ahead", { dist: fmtKm(ahead) });
+      out.push({ id: e.id, level: e.level === "info" ? "warning" : "critical", title: i18n.t("hazards.on_route_title", { label }), text: `${loc} ${e.text}`, event: e, ackable: false, scope: "route" });
     } else {
       const ref = at ?? (zone ? [zone.base.lat, zone.base.lon] as [number, number] : null);
       const away = ref ? Math.max(0, distanceM(ref[0], ref[1], e.lat!, e.lon!) - e.radius_m!) : null;
-      out.push({ id: e.id, level: e.level === "critical" ? "warning" : e.level, title: `${label} in the zone`, text: `${away != null ? `${fmtKm(away)} from you. ` : ""}${e.text}`, event: e, ackable: false });
+      const loc = away != null ? `${i18n.t("hazards.from_you", { dist: fmtKm(away) })} ` : "";
+      out.push({ id: e.id, level: e.level === "critical" ? "warning" : e.level, title: i18n.t("hazards.in_zone_title", { label }), text: `${loc}${e.text}`, event: e, ackable: false, scope: "zone" });
     }
   }
   return out.sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level] || a.event.starts_at.localeCompare(b.event.starts_at));
@@ -97,19 +102,19 @@ export function evaCheck(zone: Zone, route: Route, events: MarsEvent[], start: n
   const issues: Issue[] = [];
   for (const e of events) {
     if (!touchesZone(e, zone.id) || !overlaps(e, start, end)) continue;
-    const when = isActive(e, start) ? "now" : `in ${startsIn(e, start)}`;
+    const when = isActive(e, start) ? i18n.t("hazards.now") : i18n.t("hazards.in_time", { time: startsIn(e, start) });
     if (hasArea(e)) {
       if (routeHit(route, along, e) == null) continue;
-      issues.push({ level: e.level === "info" ? "warning" : e.level, text: `${eventLabel(e)} over the route (${when})` });
-    } else issues.push({ level: e.level, text: `${eventLabel(e)} (${when})` });
+      issues.push({ level: e.level === "info" ? "warning" : e.level, text: i18n.t("hazards.over_route", { label: eventLabel(e), when }) });
+    } else issues.push({ level: e.level, text: i18n.t("hazards.anomaly_when", { label: eventLabel(e), when }) });
   }
   const c0 = conditions(zone, start, events), c1 = conditions(zone, end, events);
   if (!c0.daylight || !c1.daylight || needMin > 12 * 60) {
-    issues.push({ level: "warning", text: `Not all in daylight: LMST ${fmtLmst(c0.time.lmst)} to ${fmtLmst(c1.time.lmst)}` });
+    issues.push({ level: "warning", text: i18n.t("hazards.not_all_daylight", { t1: fmtLmst(c0.time.lmst), t2: fmtLmst(c1.time.lmst) }) });
   }
   const doseMSv = doseOver(zone, start, end, events);
-  if (doseMSv > DOSE_LIMIT) issues.push({ level: "critical", text: `Expected dose ${doseMSv.toFixed(2)} mSv, over the ${DOSE_LIMIT} mSv EVA limit` });
-  else if (doseMSv > DOSE_LIMIT / 2) issues.push({ level: "warning", text: `Expected dose ${doseMSv.toFixed(2)} mSv, over half the EVA limit` });
+  if (doseMSv > DOSE_LIMIT) issues.push({ level: "critical", text: i18n.t("hazards.dose_over_limit", { dose: doseMSv.toFixed(2), limit: DOSE_LIMIT }) });
+  else if (doseMSv > DOSE_LIMIT / 2) issues.push({ level: "warning", text: i18n.t("hazards.dose_over_half", { dose: doseMSv.toFixed(2) }) });
   issues.sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level]);
   const level = issues.length ? issues[0].level : "ok";
   return { start, end, needMin, doseMSv, issues, level };

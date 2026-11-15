@@ -1,7 +1,7 @@
 // Data access: the browser talks straight to Supabase (tables from supabase/schema.sql, open to
 // everyone - no auth for the hackathon). Keys come from .env.local.
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { Crew, EventPatch, MarsEvent, NewCrew, NewEvent, NewPlan, PlanPatch, WorkPlan } from "./types";
+import type { Crew, EventPatch, MarsEvent, NewCrew, NewEvent, NewPlan, PlanPatch, PlanStatus, Route, WorkPlan } from "./types";
 
 const URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -20,10 +20,25 @@ interface Db {
   createPlan(p: NewPlan): Promise<WorkPlan>;
   updatePlan(id: string, patch: PlanPatch): Promise<WorkPlan>;
   deletePlan(id: string): Promise<void>;
+  /** helmet: progress along the route, only if the plan still has that route and is still active */
+  reportProgress(id: string, routeStamp: string, progress_m: number): Promise<void>;
+  /**
+   * Replace a plan's route (progress back to 0), only if the plan still has the route the caller saw
+   * (`seen` = its generated_at, null = no route) and, with `active`, is still on an EVA. Otherwise
+   * someone else changed it first: throws RouteChangedError and nothing is written.
+   */
+  replaceRoute(id: string, seen: string | null, route: Route, opts?: { active?: boolean }): Promise<WorkPlan>;
+  /** helmet: end the EVA at the airlock, only if the plan is still active on the route the helmet walked (false: it was not) */
+  finishEva(id: string, routeStamp: string, status: Extract<PlanStatus, "done" | "assigned">): Promise<boolean>;
   listEvents(): Promise<MarsEvent[]>;
   createEvent(e: NewEvent): Promise<MarsEvent>;
   updateEvent(id: string, patch: EventPatch): Promise<MarsEvent>;
   deleteEvent(id: string): Promise<void>;
+}
+
+/** a conditional write found the plan already changed by someone else (another app, another tab) */
+export class RouteChangedError extends Error {
+  constructor() { super("route_changed"); this.name = "RouteChangedError"; }
 }
 
 /** events that ended more than this long ago are no longer fetched */
@@ -50,6 +65,21 @@ function supabaseDb(sb: SupabaseClient): Db {
     createPlan: async (p) => ok(await sb.from("work_plans").insert(p).select().single()),
     updatePlan: async (id, patch) => ok(await sb.from("work_plans").update(patch).eq("id", id).select().single()),
     deletePlan: async (id) => { ok(await sb.from("work_plans").delete().eq("id", id)); },
+    reportProgress: async (id, stamp, progress_m) => {
+      ok(await sb.from("work_plans").update({ progress_m }).eq("id", id).eq("status", "in_progress").eq("route->>generated_at", stamp));
+    },
+    replaceRoute: async (id, seen, route, opts) => {
+      let q = sb.from("work_plans").update({ route, progress_m: 0 }).eq("id", id);
+      q = seen ? q.eq("route->>generated_at", seen) : q.is("route", null);
+      if (opts?.active) q = q.eq("status", "in_progress");
+      const row = ok(await q.select().maybeSingle()) as WorkPlan | null;
+      if (!row) throw new RouteChangedError();
+      return row;
+    },
+    finishEva: async (id, stamp, status) => {
+      const rows = ok(await sb.from("work_plans").update({ status }).eq("id", id).eq("status", "in_progress").eq("route->>generated_at", stamp).select("id"));
+      return rows.length > 0;
+    },
     listEvents: async () => {
       const since = new Date(Date.now() - EVENT_HISTORY_MS).toISOString();
       return ok(await sb.from("events").select("*").or(`ends_at.is.null,ends_at.gt.${since}`).order("starts_at"));

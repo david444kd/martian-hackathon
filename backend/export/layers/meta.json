@@ -1,0 +1,68 @@
+{
+ "extent_m": {
+  "x_min": -2000,
+  "x_max": 2000,
+  "y_min": -2000,
+  "y_max": 2000
+ },
+ "px": 800,
+ "cell_m": 5.0,
+ "note": "same footprint as terrain/near_texture_*.jpg; row 0 = north. Drape as a second texture or a plane 0.3 m above terrain.",
+ "hazard": {
+  "file": "hazard.png",
+  "legend": [
+   {
+    "color": "#e61e1e",
+    "label": "запрет: уклон > 15.0° или камни > 0.5 м"
+   },
+   {
+    "color": "#ffdc00→#ff7800",
+    "label": "штраф: уклон 10.0–15.0° / неровности 0.15–0.5 м"
+   }
+  ]
+ },
+ "dose": {
+  "file": "dose.png",
+  "units": "mSv/h",
+  "min": 0.013096,
+  "max": 0.025824,
+  "colormap": "plasma (min → dark purple, max → yellow)",
+  "model": "0.64 mSv/day (Curiosity RAD) × sky-view fraction from horizon silhouettes"
+ },
+ "zones": {
+  "m1": {
+   "file": "zone_m1.png",
+   "stops_min": 30.0,
+   "max_one_way_min": 93.0,
+   "area_km2": 15.23
+  },
+  "m2": {
+   "file": "zone_m2.png",
+   "stops_min": 55.0,
+   "max_one_way_min": 80.5,
+   "area_km2": 14.25
+  },
+  "m3": {
+   "file": "zone_m3.png",
+   "stops_min": 70.0,
+   "max_one_way_min": 73.0,
+   "area_km2": 13.24
+  },
+  "m4": {
+   "file": "zone_m4.png",
+   "stops_min": 95.0,
+   "max_one_way_min": 60.5,
+   "area_km2": 11.36
+  }
+ },
+ "zone_legend": [
+  {
+   "color": "#28dc78",
+   "label": "можно дойти и вернуться в лимит (ярче — больше запас)"
+  },
+  {
+   "color": "#ffc800",
+   "label": "край зоны (запас < 10%)"
+  }
+ ]
+}

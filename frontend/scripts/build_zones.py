@@ -3,7 +3,7 @@
 The browser routes walks and builds the VR terrain from these files, so no server is needed.
 Run once (needs numpy + tifffile; the DTMs come from martian-map/backend/scripts/fetch_data.py):
 
-    python3 scripts/build_zones.py ../martian-map/backend/data
+    python3 scripts/build_zones.py ../../martian-map/backend/data
 
 Writes public/zones/<id>.bin (float32 little-endian, row 0 = north) and zones.json.
 """
@@ -77,4 +77,4 @@ def main(src: Path):
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1] if len(sys.argv) > 1 else "../martian-map/backend/data").resolve())
+    main(Path(sys.argv[1] if len(sys.argv) > 1 else "../../martian-map/backend/data").resolve())
